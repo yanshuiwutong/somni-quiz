@@ -1,0 +1,57 @@
+{
+  "case_id": "runtime_docx_view_all",
+  "title": "Runtime view-all request returns current records",
+  "channel": "runtime",
+  "language": "zh-CN",
+  "quiz_mode": "dynamic",
+  "initial_state": {
+    "answered_records": {
+      "question-01": {
+        "question_id": "question-01",
+        "selected_options": ["A"],
+        "input_value": "",
+        "field_updates": {}
+      },
+      "question-02": {
+        "question_id": "question-02",
+        "selected_options": [],
+        "input_value": "23:00-07:00",
+        "field_updates": {
+          "bedtime": "23:00",
+          "wake_time": "07:00"
+        }
+      }
+    },
+    "answered_question_ids": ["question-01", "question-02"],
+    "unanswered_question_ids": ["question-03", "question-04", "question-05", "question-06", "question-07", "question-08", "question-09"],
+    "current_question_id": "question-03",
+    "pending_question_ids": ["question-03", "question-04", "question-05", "question-06", "question-07", "question-08", "question-09"],
+    "question_states": {
+      "question-01": {
+        "status": "answered",
+        "attempt_count": 0,
+        "last_action_mode": "answer"
+      },
+      "question-02": {
+        "status": "answered",
+        "attempt_count": 0,
+        "last_action_mode": "answer"
+      }
+    }
+  },
+  "turns": [
+    {
+      "input_mode": "message",
+      "raw_input": "查看记录"
+    }
+  ],
+  "expected": {
+    "answered_question_ids": ["question-01", "question-02"],
+    "modified_question_ids": [],
+    "partial_question_ids": [],
+    "pending_question_id": "question-03",
+    "clarification_needed": false,
+    "skipped_question_ids": [],
+    "expected_response_contains": ["记录", "23:00-07:00"]
+  }
+}

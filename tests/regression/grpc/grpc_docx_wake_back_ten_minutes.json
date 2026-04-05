@@ -1,0 +1,111 @@
+{
+  "case_id": "grpc_docx_wake_back_ten_minutes",
+  "title": "gRPC docx fallback maps wake-back 十来分钟 to question-08 option A",
+  "channel": "grpc",
+  "language": "zh-CN",
+  "quiz_mode": "dynamic",
+  "turns": [
+    {
+      "input_mode": "direct_answer",
+      "raw_input": "25-34 岁",
+      "direct_answer_payload": {
+        "question_id": "question-01",
+        "selected_options": [],
+        "input_value": "25-34 岁"
+      }
+    },
+    {
+      "input_mode": "direct_answer",
+      "raw_input": "11点睡 7点起",
+      "direct_answer_payload": {
+        "question_id": "question-02",
+        "selected_options": [],
+        "input_value": "11点睡 7点起"
+      }
+    },
+    {
+      "input_mode": "direct_answer",
+      "raw_input": "23点多",
+      "direct_answer_payload": {
+        "question_id": "question-03",
+        "selected_options": [
+          "B"
+        ],
+        "input_value": ""
+      }
+    },
+    {
+      "input_mode": "direct_answer",
+      "raw_input": "7点",
+      "direct_answer_payload": {
+        "question_id": "question-04",
+        "selected_options": [
+          "B"
+        ],
+        "input_value": ""
+      }
+    },
+    {
+      "input_mode": "direct_answer",
+      "raw_input": "略有波动",
+      "direct_answer_payload": {
+        "question_id": "question-05",
+        "selected_options": [
+          "B"
+        ],
+        "input_value": ""
+      }
+    },
+    {
+      "input_mode": "direct_answer",
+      "raw_input": "轻微敏感",
+      "direct_answer_payload": {
+        "question_id": "question-06",
+        "selected_options": [
+          "B"
+        ],
+        "input_value": ""
+      }
+    },
+    {
+      "input_mode": "direct_answer",
+      "raw_input": "躺下很久才能睡",
+      "direct_answer_payload": {
+        "question_id": "question-07",
+        "selected_options": [
+          "B"
+        ],
+        "input_value": ""
+      }
+    },
+    {
+      "input_mode": "message",
+      "raw_input": "十来分钟"
+    }
+  ],
+  "expected": {
+    "answered_question_ids": [
+      "question-01",
+      "question-02",
+      "question-03",
+      "question-04",
+      "question-05",
+      "question-06",
+      "question-07",
+      "question-08"
+    ],
+    "modified_question_ids": [],
+    "partial_question_ids": [],
+    "pending_question_id": "question-09",
+    "clarification_needed": false,
+    "skipped_question_ids": [],
+    "expected_answer_record": {
+      "question-08": {
+        "selected_options": [
+          "A"
+        ],
+        "input_value": ""
+      }
+    }
+  }
+}

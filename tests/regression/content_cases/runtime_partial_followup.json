@@ -1,0 +1,30 @@
+{
+  "case_id": "runtime_partial_followup",
+  "title": "Partial bedtime followed by wake time completes regular schedule",
+  "channel": "runtime",
+  "language": "zh-CN",
+  "quiz_mode": "dynamic",
+  "initial_state": {
+    "current_question_id": "question-02",
+    "pending_question_ids": ["question-02", "question-03", "question-04"],
+    "unanswered_question_ids": ["question-02", "question-03", "question-04"]
+  },
+  "turns": [
+    {
+      "input_mode": "message",
+      "raw_input": "11点睡"
+    },
+    {
+      "input_mode": "message",
+      "raw_input": "7点起"
+    }
+  ],
+  "expected": {
+    "answered_question_ids": ["question-02"],
+    "modified_question_ids": [],
+    "partial_question_ids": [],
+    "pending_question_id": "question-03",
+    "clarification_needed": false,
+    "skipped_question_ids": []
+  }
+}

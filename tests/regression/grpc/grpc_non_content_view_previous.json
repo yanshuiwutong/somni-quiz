@@ -1,0 +1,31 @@
+{
+  "case_id": "grpc_non_content_view_previous",
+  "title": "gRPC view previous shows the latest answered record and keeps the current question",
+  "channel": "grpc",
+  "language": "zh-CN",
+  "quiz_mode": "dynamic",
+  "turns": [
+    {
+      "input_mode": "direct_answer",
+      "raw_input": "25-34 岁",
+      "direct_answer_payload": {
+        "question_id": "question-01",
+        "selected_options": ["B"],
+        "input_value": "25-34 岁"
+      }
+    },
+    {
+      "input_mode": "message",
+      "raw_input": "查看上一题记录"
+    }
+  ],
+  "expected": {
+    "answered_question_ids": ["question-01"],
+    "modified_question_ids": [],
+    "partial_question_ids": [],
+    "pending_question_id": "question-02",
+    "clarification_needed": false,
+    "skipped_question_ids": [],
+    "expected_response_contains": ["上一题"]
+  }
+}

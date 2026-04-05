@@ -1,0 +1,25 @@
+[project]
+name = "somni-graph-quiz"
+version = "0.1.0"
+description = "Independent graph-based quiz runtime scaffold"
+requires-python = ">=3.11"
+dependencies = [
+  "langchain-openai>=0.3.0,<1.0.0",
+  "streamlit>=1.45.0,<2.0.0",
+  "grpcio>=1.78.0,<2.0.0",
+  "protobuf>=6.31.1,<7.0.0",
+  "pydantic>=2.8.0,<3.0.0",
+  "pydantic-settings>=2.4.0,<3.0.0"
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.ruff.lint.per-file-ignores]
+"src/somni_quiz_ai/grpc/generated/*.py" = ["E402", "F401", "UP009"]
+
+[tool.pytest.ini_options]
+markers = [
+  "llm: tests that require a real configured remote model"
+]

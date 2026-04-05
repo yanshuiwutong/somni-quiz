@@ -1,0 +1,39 @@
+{
+  "case_id": "grpc_docx_partial_followup",
+  "title": "gRPC partial regular schedule follow-up completes question-02",
+  "channel": "grpc",
+  "language": "zh-CN",
+  "quiz_mode": "dynamic",
+  "turns": [
+    {
+      "input_mode": "direct_answer",
+      "raw_input": "25-34 岁",
+      "direct_answer_payload": {
+        "question_id": "question-01",
+        "selected_options": [],
+        "input_value": "25-34 岁"
+      }
+    },
+    {
+      "input_mode": "message",
+      "raw_input": "11点睡"
+    },
+    {
+      "input_mode": "message",
+      "raw_input": "7点起"
+    }
+  ],
+  "expected": {
+    "answered_question_ids": ["question-01", "question-02"],
+    "modified_question_ids": [],
+    "partial_question_ids": [],
+    "pending_question_id": "question-03",
+    "clarification_needed": false,
+    "skipped_question_ids": [],
+    "expected_answer_record": {
+      "question-02": {
+        "input_value": "23:00-07:00"
+      }
+    }
+  }
+}

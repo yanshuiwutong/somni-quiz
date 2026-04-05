@@ -1,0 +1,31 @@
+{
+  "case_id": "runtime_docx_free_wake_around_7",
+  "title": "Free-day wake around seven maps to question-04 option B",
+  "channel": "runtime",
+  "language": "zh-CN",
+  "quiz_mode": "dynamic",
+  "initial_state": {
+    "current_question_id": "question-04",
+    "pending_question_ids": ["question-04", "question-05", "question-06", "question-07", "question-08", "question-09"],
+    "unanswered_question_ids": ["question-04", "question-05", "question-06", "question-07", "question-08", "question-09"]
+  },
+  "turns": [
+    {
+      "input_mode": "message",
+      "raw_input": "那7左右"
+    }
+  ],
+  "expected": {
+    "answered_question_ids": ["question-04"],
+    "modified_question_ids": [],
+    "partial_question_ids": [],
+    "pending_question_id": "question-05",
+    "clarification_needed": false,
+    "skipped_question_ids": [],
+    "expected_answer_record": {
+      "question-04": {
+        "selected_options": ["B"]
+      }
+    }
+  }
+}

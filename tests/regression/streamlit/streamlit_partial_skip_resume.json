@@ -1,0 +1,40 @@
+{
+  "case_id": "streamlit_partial_skip_resume",
+  "title": "Streamlit resumes a skipped partial schedule when the user later supplies the missing wake time",
+  "channel": "streamlit",
+  "language": "zh-CN",
+  "quiz_mode": "dynamic",
+  "turns": [
+    {
+      "input_mode": "message",
+      "raw_input": "11点睡"
+    },
+    {
+      "input_mode": "message",
+      "raw_input": "跳过"
+    },
+    {
+      "input_mode": "message",
+      "raw_input": "9点起"
+    }
+  ],
+  "expected": {
+    "answered_question_ids": ["question-02"],
+    "modified_question_ids": [],
+    "partial_question_ids": [],
+    "pending_question_id": "question-01",
+    "clarification_needed": false,
+    "skipped_question_ids": [],
+    "expected_answer_record": {
+      "question-02": {
+        "selected_options": [],
+        "input_value": "23:00-09:00",
+        "field_updates": {
+          "bedtime": "23:00",
+          "wake_time": "09:00"
+        }
+      }
+    },
+    "expected_response_contains": ["年龄段"]
+  }
+}

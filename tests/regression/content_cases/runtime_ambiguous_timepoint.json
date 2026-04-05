@@ -1,0 +1,25 @@
+{
+  "case_id": "runtime_ambiguous_timepoint",
+  "title": "Pure time point asks for clarification instead of forcing a winner",
+  "channel": "runtime",
+  "language": "zh-CN",
+  "quiz_mode": "dynamic",
+  "initial_state": {
+    "current_question_id": "question-02",
+    "pending_question_ids": ["question-02", "question-03", "question-04"]
+  },
+  "turns": [
+    {
+      "input_mode": "message",
+      "raw_input": "23点"
+    }
+  ],
+  "expected": {
+    "answered_question_ids": [],
+    "modified_question_ids": [],
+    "partial_question_ids": ["question-02"],
+    "pending_question_id": "question-02",
+    "clarification_needed": false,
+    "skipped_question_ids": []
+  }
+}
