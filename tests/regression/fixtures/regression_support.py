@@ -79,6 +79,25 @@ def execute_grpc_case(case: dict) -> somni_quiz_pb2.ChatQuizResponse:
                     question_id=question["question_id"],
                     title=question["title"],
                     input_type=question["input_type"],
+                    tags=list(question.get("tags", [])),
+                    options=[
+                        somni_quiz_pb2.BusinessOption(
+                            option_id=option.get("option_id", ""),
+                            option_text=option.get("label", option.get("option_text", "")),
+                            label_value=(option.get("aliases") or [""])[0] if option.get("aliases") else "",
+                        )
+                        for option in question.get("options", [])
+                    ],
+                    config=somni_quiz_pb2.PendingQuestionConfig(
+                        items=[
+                            somni_quiz_pb2.PendingQuestionConfigItem(
+                                index=int(item.get("index", 0)),
+                                label=str(item.get("label", "")),
+                                format=str(item.get("format", "")),
+                            )
+                            for item in (question.get("config") or {}).get("items", [])
+                        ]
+                    ),
                 )
                 for question in runtime_question_catalog()["question_index"].values()
             ],
@@ -174,6 +193,18 @@ def assert_grpc_expectations(response: somni_quiz_pb2.ChatQuizResponse, expected
     """Assert structured expectations against a gRPC response."""
     assert response.pending_question.question_id == expected["pending_question_id"]
     assert [item.question_id for item in response.answer_record.answers] == expected["answered_question_ids"]
+    if "expected_pending_question_config" in expected:
+        pending_config = {
+            "items": [
+                {
+                    "index": item.index,
+                    "label": item.label,
+                    "format": item.format,
+                }
+                for item in response.pending_question.config.items
+            ]
+        }
+        assert pending_config == expected["expected_pending_question_config"]
     if "expected_answer_record" in expected:
         answered_records = {
             item.question_id: {

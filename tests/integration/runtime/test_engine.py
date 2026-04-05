@@ -561,3 +561,96 @@ def test_engine_view_previous_keeps_current_question_and_mentions_previous_answe
     assert result["pending_question"]["question_id"] == "question-02"
     assert "上一题" in result["assistant_message"]
     assert "B" in result["assistant_message"]
+
+
+def test_engine_does_not_force_unrelated_content_into_current_age_question() -> None:
+    question_catalog = {
+        "question_order": ["question-01", "question-05", "question-06"],
+        "question_index": {
+            "question-01": {
+                "question_id": "question-01",
+                "title": "您的年龄段？",
+                "description": "",
+                "input_type": "radio",
+                "options": [
+                    {"option_id": "A", "label": "18-24 岁", "aliases": []},
+                    {"option_id": "B", "label": "25-34 岁", "aliases": []},
+                ],
+                "tags": ["基础信息"],
+                "metadata": {
+                    "allow_partial": False,
+                    "structured_kind": "radio",
+                    "response_style": "default",
+                    "matching_hints": ["年龄"],
+                },
+            },
+            "question-05": {
+                "question_id": "question-05",
+                "title": "遇到压力或重要事情，您的睡眠会受影响吗？",
+                "description": "",
+                "input_type": "radio",
+                "options": [
+                    {"option_id": "A", "label": "毫无影响，倒头就睡", "aliases": []},
+                    {"option_id": "E", "label": "大脑停不下来，几乎睡不着", "aliases": []},
+                ],
+                "tags": ["人格判定"],
+                "metadata": {
+                    "allow_partial": False,
+                    "structured_kind": "radio",
+                    "response_style": "default",
+                    "matching_hints": ["压力", "睡眠"],
+                },
+            },
+            "question-06": {
+                "question_id": "question-06",
+                "title": "您对卧室里的光线、声音敏感度如何？",
+                "description": "",
+                "input_type": "radio",
+                "options": [
+                    {"option_id": "B", "label": "轻微敏感，但影响不大", "aliases": []},
+                    {"option_id": "D", "label": "一点微光或细小声音就会惊醒", "aliases": []},
+                ],
+                "tags": ["人格判定"],
+                "metadata": {
+                    "allow_partial": False,
+                    "structured_kind": "radio",
+                    "response_style": "default",
+                    "matching_hints": ["声光", "敏感"],
+                },
+            },
+        },
+    }
+    graph_state = create_graph_state(
+        session_id="session-unrelated-age",
+        channel="grpc",
+        quiz_mode="dynamic",
+        question_catalog=question_catalog,
+        language_preference="zh-CN",
+    )
+    engine = GraphRuntimeEngine()
+
+    pressure_result = engine.run_turn(graph_state, TurnInput(
+        session_id="session-unrelated-age",
+        channel="grpc",
+        input_mode="message",
+        raw_input="大脑停不下来，几乎睡不着",
+        language_preference="zh-CN",
+    ))
+
+    pressure_answers = {item["question_id"]: item for item in pressure_result["answer_record"]["answers"]}
+    assert pressure_answers["question-05"]["selected_options"] == ["E"]
+    assert pressure_result["pending_question"]["question_id"] == "question-01"
+    assert "年龄" in pressure_result["assistant_message"]
+
+    sensitivity_result = engine.run_turn(pressure_result["updated_graph_state"], TurnInput(
+        session_id="session-unrelated-age",
+        channel="grpc",
+        input_mode="message",
+        raw_input="对声光轻微敏感，但影响不大",
+        language_preference="zh-CN",
+    ))
+
+    sensitivity_answers = {item["question_id"]: item for item in sensitivity_result["answer_record"]["answers"]}
+    assert sensitivity_answers["question-06"]["selected_options"] == ["B"]
+    assert sensitivity_result["pending_question"]["question_id"] == "question-01"
+    assert "年龄" in sensitivity_result["assistant_message"]

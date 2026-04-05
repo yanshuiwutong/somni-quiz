@@ -29,6 +29,7 @@ def map_questionnaire_to_catalog(questionnaire: list) -> dict:
                 }
                 for option in question.options
             ],
+            "config": _map_question_config(question),
             "metadata": {
                 "allow_partial": question.input_type == "time_range",
                 "structured_kind": question.input_type or None,
@@ -86,6 +87,7 @@ def build_pending_question_message(pending_question: dict | None) -> somni_quiz_
             )
             for option in pending_question.get("options", [])
         ],
+        config=_build_pending_question_config_message(pending_question.get("config")),
     )
 
 
@@ -118,4 +120,35 @@ def build_final_result_message(final_result: dict | None) -> Struct:
     message = Struct()
     if final_result:
         message.update(final_result)
+    return message
+
+
+def _map_question_config(question: somni_quiz_pb2.BusinessQuestion) -> dict | None:
+    items = [
+        {
+            "index": item.index,
+            "label": item.label,
+            "format": item.format,
+        }
+        for item in question.config.items
+    ]
+    if not items:
+        return None
+    return {"items": items}
+
+
+def _build_pending_question_config_message(config: dict | None) -> somni_quiz_pb2.PendingQuestionConfig:
+    message = somni_quiz_pb2.PendingQuestionConfig()
+    if not isinstance(config, dict):
+        return message
+    for item in config.get("items", []):
+        if not isinstance(item, dict):
+            continue
+        message.items.append(
+            somni_quiz_pb2.PendingQuestionConfigItem(
+                index=int(item.get("index", 0)),
+                label=str(item.get("label", "")),
+                format=str(item.get("format", "")),
+            )
+        )
     return message

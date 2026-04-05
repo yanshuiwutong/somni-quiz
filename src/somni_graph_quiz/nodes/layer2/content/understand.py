@@ -7,6 +7,7 @@ from pathlib import Path
 
 from somni_graph_quiz.llm.invocation import invoke_json
 from somni_graph_quiz.llm.prompt_loader import PromptLoader
+from somni_graph_quiz.nodes.layer2.content.mapping import map_content_answer
 from somni_graph_quiz.utils.time_parse import parse_schedule_fragment
 
 
@@ -17,7 +18,7 @@ _AGE_CORRECTION_PATTERN = re.compile(r"(?:不是|改成|改为|改)\s*(?P<age>\d
 _RAW_NUMBER_PATTERN = re.compile(r"\b(?P<number>\d{1,3})\b")
 _TIME_EXPRESSION_PATTERN = re.compile(
     r"(?:\d{1,2}|十二|十一|十|两|零|一|二|三|四|五|六|七|八|九)"
-    r"(?:\s*[:：]\s*\d{1,2})?\s*(?:点|时)"
+    r"(?:\s*[:：]\s*\d{1,2})?\s*(?:点|时)(?=$|[\s,，。；;：:、!?？]|左右|前后|半|整|睡|起|醒|上床|下床)"
 )
 _RELAXED_CONTEXT_TOKENS = ("自由", "自然", "周末", "休息日", "完全自由安排")
 
@@ -43,8 +44,48 @@ class ContentUnderstandNode:
 
         llm_output = self._try_llm(graph_state, turn_input)
         if llm_output is not None:
-            return llm_output
-        return self._rule_understand(graph_state, turn_input, raw_input)
+            return self._standardize_understood(graph_state, llm_output)
+        return self._standardize_understood(
+            graph_state,
+            self._rule_understand(graph_state, turn_input, raw_input),
+        )
+
+    def standardize_content_unit(self, graph_state: dict, content_unit: dict) -> dict:
+        """Normalize a resolved content unit into a storage-ready payload."""
+        question_id = content_unit.get("winner_question_id")
+        if not question_id:
+            return self._normalize_unit(content_unit, 1)
+        question = graph_state["question_catalog"]["question_index"].get(question_id)
+        if not question:
+            return self._normalize_unit(content_unit, 1)
+        normalized = self._normalize_unit(content_unit, 1)
+        if normalized["selected_options"] or normalized["field_updates"] or normalized["missing_fields"]:
+            return normalized
+        mapped = map_content_answer(
+            question,
+            normalized.get("raw_extracted_value", normalized.get("unit_text", "")),
+            raw_text=normalized.get("unit_text", ""),
+        )
+        field_updates = dict(mapped.get("field_updates", {}))
+        missing_fields = list(mapped.get("missing_fields", []))
+        if normalized.get("action_mode") == "partial_completion" and field_updates:
+            existing = (
+                graph_state["session_memory"]
+                .get("pending_partial_answers", {})
+                .get(question_id, {})
+                .get("filled_fields", {})
+            )
+            merged_fields = {**dict(existing), **field_updates}
+            missing_fields = [
+                field for field in ("bedtime", "wake_time") if field not in merged_fields
+            ]
+        return {
+            **normalized,
+            "selected_options": list(mapped.get("selected_options", [])),
+            "input_value": str(mapped.get("input_value", "")),
+            "field_updates": field_updates,
+            "missing_fields": missing_fields,
+        }
 
     def _try_llm(self, graph_state: dict, turn_input: object) -> dict | None:
         runtime = graph_state["runtime"]
@@ -135,6 +176,11 @@ class ContentUnderstandNode:
                 "content_units": [],
                 "clarification_needed": True,
                 "clarification_reason": "partial_missing_fields",
+                "clarification_question_id": current_question_id,
+                "clarification_question_title": graph_state["question_catalog"]["question_index"][
+                    current_question_id
+                ].get("title"),
+                "clarification_kind": "partial_missing_fields",
             }
 
         if raw_input.isdigit():
@@ -192,20 +238,52 @@ class ContentUnderstandNode:
                 "clarification_reason": None,
             }
 
-        return {
-            "content_units": [
-                {
-                    "unit_id": "unit-1",
-                    "unit_text": raw_input,
-                    "action_mode": self._action_mode(session_memory, current_question_id),
-                    "candidate_question_ids": [current_question_id] if current_question_id else [],
-                    "winner_question_id": current_question_id,
-                    "needs_attribution": False,
-                    "raw_extracted_value": raw_input,
+        generic_candidates = self._extract_generic_question_candidates(graph_state, raw_input)
+        if generic_candidates:
+            if len(generic_candidates) == 1:
+                question_id = generic_candidates[0]
+                return {
+                    "content_units": [
+                        {
+                            "unit_id": "unit-1",
+                            "unit_text": raw_input,
+                            "action_mode": self._action_mode(session_memory, question_id),
+                            "candidate_question_ids": [question_id],
+                            "winner_question_id": question_id,
+                            "needs_attribution": False,
+                            "raw_extracted_value": raw_input,
+                        }
+                    ],
+                    "clarification_needed": False,
+                    "clarification_reason": None,
                 }
-            ],
-            "clarification_needed": current_question_id is None,
-            "clarification_reason": None if current_question_id else "no_target_question",
+            return {
+                "content_units": [
+                    {
+                        "unit_id": "unit-1",
+                        "unit_text": raw_input,
+                        "action_mode": self._action_mode(session_memory, current_question_id),
+                        "candidate_question_ids": generic_candidates,
+                        "winner_question_id": None,
+                        "needs_attribution": True,
+                        "raw_extracted_value": raw_input,
+                    }
+                ],
+                "clarification_needed": False,
+                "clarification_reason": None,
+            }
+
+        return {
+            "content_units": [],
+            "clarification_needed": True,
+            "clarification_reason": "current_question_mismatch" if current_question_id else "no_target_question",
+            "clarification_question_id": current_question_id,
+            "clarification_question_title": (
+                graph_state["question_catalog"]["question_index"][current_question_id].get("title")
+                if current_question_id
+                else None
+            ),
+            "clarification_kind": "current_question_mismatch" if current_question_id else "no_target_question",
         }
 
     def _contains_time_expression(self, raw_input: str) -> bool:
@@ -216,6 +294,8 @@ class ContentUnderstandNode:
 
     def _extract_age_unit(self, session_memory: dict, raw_input: str) -> dict | None:
         question_id = "question-01"
+        if question_id not in session_memory["question_states"]:
+            return None
         answered = session_memory["question_states"][question_id]["status"] == "answered"
         correction_match = _AGE_CORRECTION_PATTERN.search(raw_input)
         if "年龄" in raw_input and correction_match:
@@ -267,6 +347,8 @@ class ContentUnderstandNode:
         return None
 
     def _extract_schedule_unit(self, session_memory: dict, raw_input: str) -> dict | None:
+        if "question-02" not in session_memory["question_states"]:
+            return None
         schedule = parse_schedule_fragment(raw_input)
         if not schedule["filled_fields"]:
             return None
@@ -347,6 +429,38 @@ class ContentUnderstandNode:
             "clarification_context": session_memory["clarification_context"],
         }
 
+    def _extract_generic_question_candidates(self, graph_state: dict, raw_input: str) -> list[str]:
+        candidates: list[str] = []
+        question_catalog = graph_state["question_catalog"]
+        has_time_expression = self._contains_time_expression(raw_input)
+        for question_id in question_catalog["question_order"]:
+            question = question_catalog["question_index"][question_id]
+            if has_time_expression and self._looks_like_age_question(question):
+                continue
+            mapped = map_content_answer(question, raw_input, raw_text=raw_input)
+            if self._has_answer_signal(question, mapped):
+                candidates.append(question_id)
+        return candidates
+
+    def _has_answer_signal(self, question: dict, mapped: dict) -> bool:
+        if mapped.get("selected_options"):
+            return True
+        if mapped.get("field_updates"):
+            return True
+        input_type = str(question.get("input_type", "")).lower()
+        if input_type == "text" and not question.get("options"):
+            return False
+        return False
+
+    def _looks_like_age_question(self, question: dict) -> bool:
+        if str(question.get("question_id")) == "question-01":
+            return True
+        title = str(question.get("title", "")).lower()
+        if "年龄" in title or "age" in title:
+            return True
+        hints = [str(item).lower() for item in question.get("metadata", {}).get("matching_hints", [])]
+        return any(token in {"年龄", "age"} for token in hints)
+
     def _normalize_unit(self, unit: dict, index: int) -> dict:
         return {
             "unit_id": unit.get("unit_id") or f"unit-{index}",
@@ -356,4 +470,21 @@ class ContentUnderstandNode:
             "winner_question_id": unit.get("winner_question_id"),
             "needs_attribution": bool(unit.get("needs_attribution", False)),
             "raw_extracted_value": unit.get("raw_extracted_value", unit.get("unit_text", "")),
+            "selected_options": list(unit.get("selected_options", [])),
+            "input_value": str(unit.get("input_value", "")),
+            "field_updates": dict(unit.get("field_updates", {})),
+            "missing_fields": list(unit.get("missing_fields", [])),
+        }
+
+    def _standardize_understood(self, graph_state: dict, understood: dict) -> dict:
+        return {
+            "content_units": [
+                self.standardize_content_unit(graph_state, unit)
+                for unit in understood.get("content_units", [])
+            ],
+            "clarification_needed": bool(understood.get("clarification_needed", False)),
+            "clarification_reason": understood.get("clarification_reason"),
+            "clarification_question_id": understood.get("clarification_question_id"),
+            "clarification_question_title": understood.get("clarification_question_title"),
+            "clarification_kind": understood.get("clarification_kind"),
         }

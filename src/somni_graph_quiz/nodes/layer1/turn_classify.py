@@ -118,6 +118,7 @@ class TurnClassifyNode:
             "raw_input": getattr(turn_input, "raw_input", ""),
             "response_language": response_language,
             "memory_view": build_llm_memory_view(graph_state),
+            "question_catalog_summary": self._build_question_catalog_summary(graph_state["question_catalog"]),
         }
         try:
             prompt_text = self._prompt_loader.render("layer1/turn_classify.md", payload)
@@ -131,6 +132,27 @@ class TurnClassifyNode:
         if output.get("main_branch") not in {"content", "non_content"}:
             return None
         return output
+
+    def _build_question_catalog_summary(self, question_catalog: dict) -> list[dict]:
+        summary: list[dict] = []
+        for question_id in question_catalog["question_order"]:
+            question = question_catalog["question_index"][question_id]
+            summary.append(
+                {
+                    "question_id": question_id,
+                    "title": question.get("title"),
+                    "input_type": question.get("input_type"),
+                    "tags": list(question.get("tags", [])),
+                    "options": [
+                        {
+                            "option_id": option.get("option_id"),
+                            "label": option.get("label", option.get("option_text", "")),
+                        }
+                        for option in question.get("options", [])
+                    ],
+                }
+            )
+        return summary
 
     def _classify(self, normalized_input: str) -> tuple[str, str]:
         lowered = normalized_input.lower()

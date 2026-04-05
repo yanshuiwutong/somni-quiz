@@ -49,3 +49,52 @@ def test_build_pending_question_message_returns_proto_message() -> None:
 
     assert isinstance(pending, somni_quiz_pb2.PendingQuestion)
     assert pending.question_id == "question-01"
+
+
+def test_map_questionnaire_to_catalog_preserves_question_config() -> None:
+    questionnaire = [
+        somni_quiz_pb2.BusinessQuestion(
+            question_id="question-02",
+            title="Q2",
+            input_type="time_range",
+            config=somni_quiz_pb2.PendingQuestionConfig(
+                items=[
+                    somni_quiz_pb2.PendingQuestionConfigItem(index=0, label="上床时间：", format="HH:mm"),
+                    somni_quiz_pb2.PendingQuestionConfigItem(index=1, label="起床时间：", format="HH:mm"),
+                ]
+            ),
+        )
+    ]
+
+    catalog = map_questionnaire_to_catalog(questionnaire)
+
+    assert catalog["question_index"]["question-02"]["config"] == {
+        "items": [
+            {"index": 0, "label": "上床时间：", "format": "HH:mm"},
+            {"index": 1, "label": "起床时间：", "format": "HH:mm"},
+        ]
+    }
+
+
+def test_build_pending_question_message_preserves_config() -> None:
+    pending = build_pending_question_message(
+        {
+            "question_id": "question-02",
+            "title": "Q2",
+            "input_type": "time_range",
+            "tags": ["profile"],
+            "options": [],
+            "config": {
+                "items": [
+                    {"index": 0, "label": "上床时间：", "format": "HH:mm"},
+                    {"index": 1, "label": "起床时间：", "format": "HH:mm"},
+                ]
+            },
+        }
+    )
+
+    assert pending.config.items[0].index == 0
+    assert pending.config.items[0].label == "上床时间："
+    assert pending.config.items[0].format == "HH:mm"
+    assert pending.config.items[1].index == 1
+    assert pending.config.items[1].label == "起床时间："

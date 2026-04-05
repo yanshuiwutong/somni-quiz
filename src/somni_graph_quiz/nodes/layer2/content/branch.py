@@ -20,11 +20,22 @@ class ContentBranch:
         resolved_units = []
         for unit in understood["content_units"]:
             if unit.get("needs_attribution"):
-                resolved_units.append(self._attribution.run(graph_state, unit))
+                resolved_units.append(
+                    self._understand.standardize_content_unit(
+                        graph_state,
+                        self._attribution.run(graph_state, unit),
+                    )
+                )
             else:
-                resolved_units.append(unit)
+                resolved_units.append(self._understand.standardize_content_unit(graph_state, unit))
         return self._apply.run(
             graph_state,
             resolved_units,
             clarification_needed=understood["clarification_needed"],
+            clarification_details={
+                "clarification_reason": understood.get("clarification_reason"),
+                "clarification_question_id": understood.get("clarification_question_id"),
+                "clarification_question_title": understood.get("clarification_question_title"),
+                "clarification_kind": understood.get("clarification_kind"),
+            },
         )

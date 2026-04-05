@@ -16,6 +16,12 @@ def _build_questionnaire() -> list:
             question_id="question-02",
             title="What time do you usually sleep and wake?",
             input_type="time_range",
+            config=somni_quiz_pb2.PendingQuestionConfig(
+                items=[
+                    somni_quiz_pb2.PendingQuestionConfigItem(index=0, label="上床时间：", format="HH:mm"),
+                    somni_quiz_pb2.PendingQuestionConfigItem(index=1, label="起床时间：", format="HH:mm"),
+                ]
+            ),
         ),
     ]
 
@@ -60,6 +66,8 @@ def test_chat_quiz_message_updates_answer_record() -> None:
     assert response.success is True
     assert response.answer_record.answers[0].question_id == "question-01"
     assert response.pending_question.question_id == "question-02"
+    assert response.pending_question.config.items[0].label == "上床时间："
+    assert response.pending_question.config.items[1].format == "HH:mm"
 
 
 def test_chat_quiz_direct_answer_routes_to_runtime() -> None:

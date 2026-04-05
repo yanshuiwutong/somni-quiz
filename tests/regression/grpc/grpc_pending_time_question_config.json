@@ -1,0 +1,35 @@
+{
+  "case_id": "grpc_pending_time_question_config",
+  "title": "gRPC pending time_range question preserves config items from questionnaire",
+  "channel": "grpc",
+  "language": "zh-CN",
+  "quiz_mode": "dynamic",
+  "turns": [
+    {
+      "input_mode": "message",
+      "raw_input": "29岁"
+    }
+  ],
+  "expected": {
+    "answered_question_ids": ["question-01"],
+    "modified_question_ids": [],
+    "partial_question_ids": [],
+    "pending_question_id": "question-02",
+    "clarification_needed": false,
+    "skipped_question_ids": [],
+    "expected_pending_question_config": {
+      "items": [
+        {
+          "index": 0,
+          "label": "上床时间：",
+          "format": "HH:mm"
+        },
+        {
+          "index": 1,
+          "label": "起床时间：",
+          "format": "HH:mm"
+        }
+      ]
+    }
+  }
+}

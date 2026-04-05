@@ -244,3 +244,51 @@ def test_response_composer_names_navigation_target() -> None:
 
     assert "下一题" in message or "切到" in message
     assert "入睡时间" in message
+
+
+def test_response_composer_clarification_uses_target_question_not_raw_input_topic() -> None:
+    finalized = SimpleNamespace(
+        raw_input="对声光轻微敏感，但影响不大",
+        input_mode="message",
+        main_branch="content",
+        non_content_intent="none",
+        turn_outcome="clarification",
+        current_question={"question_id": "question-01", "title": "您的年龄段？", "input_type": "radio"},
+        next_question={"question_id": "question-01", "title": "您的年龄段？", "input_type": "radio"},
+        finalized=False,
+        response_language="zh-CN",
+        response_facts={
+            "clarification_question_id": "question-01",
+            "clarification_question_title": "您的年龄段？",
+            "clarification_kind": "question_identified_option_not_identified",
+        },
+    )
+
+    message = ResponseComposerNode().run(finalized)
+
+    assert "年龄" in message
+    assert "声光" not in message
+    assert "敏感" not in message
+
+
+def test_response_composer_clarification_uses_identified_sensitivity_question() -> None:
+    finalized = SimpleNamespace(
+        raw_input="很敏感",
+        input_mode="message",
+        main_branch="content",
+        non_content_intent="none",
+        turn_outcome="clarification",
+        current_question={"question_id": "question-01", "title": "您的年龄段？", "input_type": "radio"},
+        next_question={"question_id": "question-01", "title": "您的年龄段？", "input_type": "radio"},
+        finalized=False,
+        response_language="zh-CN",
+        response_facts={
+            "clarification_question_id": "question-06",
+            "clarification_question_title": "您对卧室里的光线、声音敏感度如何？",
+            "clarification_kind": "question_identified_option_not_identified",
+        },
+    )
+
+    message = ResponseComposerNode().run(finalized)
+
+    assert "光线" in message or "声音" in message or "敏感度" in message

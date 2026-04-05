@@ -23,6 +23,7 @@ def map_streamlit_questionnaire_to_catalog(questionnaire: list[dict]) -> dict:
                 }
                 for option in question.get("options", [])
             ],
+            "config": _map_question_config(question),
             "metadata": {
                 "allow_partial": question.get("input_type") == "time_range",
                 "structured_kind": question.get("input_type"),
@@ -55,3 +56,21 @@ def build_streamlit_view(
         "quiz_mode": quiz_mode,
         "chat_history": chat_history,
     }
+
+
+def _map_question_config(question: dict) -> dict | None:
+    config = question.get("config")
+    if not isinstance(config, dict):
+        return None
+    items = [
+        {
+            "index": int(item.get("index", 0)),
+            "label": str(item.get("label", "")),
+            "format": str(item.get("format", "")),
+        }
+        for item in config.get("items", [])
+        if isinstance(item, dict)
+    ]
+    if not items:
+        return None
+    return {"items": items}

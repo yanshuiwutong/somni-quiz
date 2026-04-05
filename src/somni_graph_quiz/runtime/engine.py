@@ -36,10 +36,10 @@ class GraphRuntimeEngine:
         updated_graph_state["runtime"]["finalized"] = finalized.finalized
         self._append_recent_turn(updated_graph_state, turn_input, branch_result, finalized)
         assistant_message = self._respond.run(finalized)
-        pending_question = finalized.next_question or get_question(
-            updated_graph_state["question_catalog"],
-            updated_graph_state["session_memory"]["current_question_id"],
-        )
+        pending_question_id = finalized.response_facts.get("next_question_id") or updated_graph_state[
+            "session_memory"
+        ]["current_question_id"]
+        pending_question = get_question(updated_graph_state["question_catalog"], pending_question_id)
         return create_turn_result(
             updated_graph_state=updated_graph_state,
             answer_record=finalized.updated_answer_record,

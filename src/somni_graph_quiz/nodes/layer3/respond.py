@@ -129,6 +129,8 @@ class ResponseComposerNode:
             return f"Okay. Let's continue with {next_title}."
         if outcome == "skipped":
             return f"Skipped. Let's continue with the next question: {next_title}."
+        if outcome == "clarification":
+            return self._compose_en_clarification(response_facts, active_title=next_title)
         return f"Let's keep going with {next_title}."
 
     def _compose_zh(
@@ -181,6 +183,8 @@ class ResponseComposerNode:
             return f"好的，我们继续回答{next_title}。"
         if outcome == "skipped":
             return f"这题先跳过，我们继续回答下一题：{next_title}。"
+        if outcome == "clarification":
+            return self._compose_zh_clarification(response_facts, fallback_title=active_title)
         return f"我们继续这题：{active_title}。"
 
     def _next_title(self, next_question: dict | None, *, fallback: str) -> str:
@@ -211,3 +215,29 @@ class ResponseComposerNode:
     def _looks_like_thanks(self, raw_input: str) -> bool:
         lowered = raw_input.strip().lower()
         return any(token in lowered for token in ("谢谢", "感谢", "thanks", "thank you"))
+
+    def _compose_zh_clarification(self, response_facts: dict, *, fallback_title: str) -> str:
+        title = str(response_facts.get("clarification_question_title") or fallback_title)
+        kind = str(response_facts.get("clarification_kind") or response_facts.get("clarification_reason") or "")
+        if "年龄" in title:
+            return "不好意思，我这边还没法确定你的年龄段，可以再告诉我一下你的年龄段吗？"
+        if any(token in title for token in ("光线", "声音", "敏感")):
+            return "我想确认一下，你对卧室里的光线和声音敏感度更接近哪种情况？"
+        if any(token in kind for token in ("partial", "missing_fields")):
+            return f"我先记下了一部分信息，请再补充一下：{title}"
+        if "question_identified_option_not_identified" in kind:
+            return f"我想再确认一下，你在“{title}”这题里更接近哪一种情况？"
+        return f"不好意思，我想再确认一下：{title}"
+
+    def _compose_en_clarification(self, response_facts: dict, *, active_title: str) -> str:
+        title = str(response_facts.get("clarification_question_title") or active_title)
+        kind = str(response_facts.get("clarification_kind") or response_facts.get("clarification_reason") or "")
+        if "age" in title.lower():
+            return "I couldn't determine your age range yet. Could you tell me your age range again?"
+        if any(token in title.lower() for token in ("light", "sound", "sensitive")):
+            return "I want to confirm your bedroom light and sound sensitivity. Which situation is closer for you?"
+        if any(token in kind for token in ("partial", "missing_fields")):
+            return f"I've noted part of it. Could you fill in the missing part for {title}?"
+        if "question_identified_option_not_identified" in kind:
+            return f"I want to confirm which option is closer for {title}."
+        return f"I want to confirm one detail about {title}."

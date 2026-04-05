@@ -13,9 +13,15 @@ from somni_graph_quiz.utils.time_parse import build_time_range_input_value
 class ContentApplyNode:
     """Apply resolved content units into session memory patches."""
 
-    def run(self, graph_state: dict, content_units: list[dict], clarification_needed: bool = False) -> dict:
+    def run(
+        self,
+        graph_state: dict,
+        content_units: list[dict],
+        clarification_needed: bool = False,
+        clarification_details: dict | None = None,
+    ) -> dict:
         if clarification_needed:
-            return self._handle_clarification(graph_state)
+            return self._handle_clarification(graph_state, clarification_details or {})
 
         session_memory = graph_state["session_memory"]
         answered_records = deepcopy(session_memory["answered_records"])
@@ -52,6 +58,7 @@ class ContentApplyNode:
             if not question_id:
                 rejected_unit_ids.append(unit["unit_id"])
                 response_facts.setdefault("clarification_reason", "missing_winner")
+                self._set_clarification_target(response_facts, graph_state, None, "question_not_identified")
                 continue
             if question_id in duplicate_question_ids:
                 rejected_unit_ids.append(unit["unit_id"])
@@ -66,9 +73,10 @@ class ContentApplyNode:
             if not self._is_valid_action_mode(action_mode, question_status, has_pending_partial):
                 rejected_unit_ids.append(unit["unit_id"])
                 response_facts.setdefault("clarification_reason", "invalid_action_mode_for_state")
+                self._set_clarification_target(response_facts, graph_state, question_id, "invalid_action_mode_for_state")
                 continue
 
-            mapped = map_content_value(question_id, unit.get("raw_extracted_value", unit["unit_text"]))
+            mapped = self._mapped_payload(unit, question_id)
 
             if question_id == "question-02":
                 outcome = self._apply_schedule(
@@ -83,6 +91,12 @@ class ContentApplyNode:
                 if outcome["status"] == "rejected":
                     rejected_unit_ids.append(unit["unit_id"])
                     response_facts.setdefault("clarification_reason", outcome["reason"])
+                    self._set_clarification_target(
+                        response_facts,
+                        graph_state,
+                        question_id,
+                        "partial_missing_fields" if outcome["reason"] == "invalid_time_value" else outcome["reason"],
+                    )
                     continue
                 if outcome["status"] == "partial":
                     if question_id in skipped_question_ids:
@@ -105,6 +119,12 @@ class ContentApplyNode:
                 if not self._is_valid_mapped_answer(question, mapped):
                     rejected_unit_ids.append(unit["unit_id"])
                     response_facts.setdefault("clarification_reason", "invalid_answer_value")
+                    self._set_clarification_target(
+                        response_facts,
+                        graph_state,
+                        question_id,
+                        "question_identified_option_not_identified",
+                    )
                     continue
                 if action_mode == "modify":
                     previous_answer_record[question_id] = deepcopy(answered_records[question_id])
@@ -177,7 +197,7 @@ class ContentApplyNode:
             },
         )
 
-    def _handle_clarification(self, graph_state: dict) -> dict:
+    def _handle_clarification(self, graph_state: dict, clarification_details: dict) -> dict:
         session_memory = graph_state["session_memory"]
         current_question_id = session_memory["current_question_id"]
         question_states = deepcopy(session_memory["question_states"])
@@ -205,6 +225,7 @@ class ContentApplyNode:
                     branch_type="content",
                     state_patch={
                         "session_memory": {
+                            "answered_records": deepcopy(session_memory["answered_records"]),
                             "question_states": question_states,
                             "skipped_question_ids": skipped_question_ids,
                             "pending_question_ids": pending_question_ids,
@@ -221,15 +242,28 @@ class ContentApplyNode:
                 "attempt_count": current_attempt,
                 "last_action_mode": question_states[current_question_id]["last_action_mode"],
             }
+        response_facts = {
+            "clarification_reason": clarification_details.get("clarification_reason", "content_understand"),
+        }
+        target_question_id = clarification_details.get("clarification_question_id") or current_question_id
+        clarification_kind = clarification_details.get("clarification_kind") or response_facts["clarification_reason"]
+        self._set_clarification_target(
+            response_facts,
+            graph_state,
+            target_question_id,
+            clarification_kind,
+            title=clarification_details.get("clarification_question_title"),
+        )
         return create_branch_result(
             branch_type="content",
             state_patch={
                 "session_memory": {
+                    "answered_records": deepcopy(session_memory["answered_records"]),
                     "question_states": question_states,
                 }
             },
             clarification_needed=True,
-            response_facts={"clarification_reason": "content_understand"},
+            response_facts=response_facts,
         )
 
     def _apply_schedule(
@@ -334,3 +368,37 @@ class ContentApplyNode:
         if input_type in {"radio", "single", "select", "multi", "checkbox", "time_point"}:
             return bool(mapped.get("selected_options"))
         return bool(mapped.get("selected_options")) or bool(str(mapped.get("input_value", "")).strip())
+
+    def _mapped_payload(self, unit: dict, question_id: str) -> dict:
+        selected_options = list(unit.get("selected_options", []))
+        field_updates = dict(unit.get("field_updates", {}))
+        missing_fields = list(unit.get("missing_fields", []))
+        input_value = str(unit.get("input_value", ""))
+        if selected_options or field_updates or missing_fields:
+            return {
+                "selected_options": selected_options,
+                "input_value": input_value,
+                "filled_fields": field_updates,
+                "field_updates": field_updates,
+                "missing_fields": missing_fields,
+            }
+        return map_content_value(question_id, unit.get("raw_extracted_value", unit["unit_text"]))
+
+    def _set_clarification_target(
+        self,
+        response_facts: dict,
+        graph_state: dict,
+        question_id: str | None,
+        clarification_kind: str,
+        *,
+        title: str | None = None,
+    ) -> None:
+        response_facts.setdefault("clarification_kind", clarification_kind)
+        if not question_id:
+            return
+        question = graph_state["question_catalog"]["question_index"].get(question_id, {})
+        response_facts.setdefault("clarification_question_id", question_id)
+        response_facts.setdefault(
+            "clarification_question_title",
+            title or question.get("title"),
+        )

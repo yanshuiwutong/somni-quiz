@@ -232,3 +232,77 @@ def test_turn_classify_marks_greeting_as_pullback_chat(question_catalog: dict) -
 
     assert result["state_patch"]["turn"]["main_branch"] == "non_content"
     assert result["state_patch"]["turn"]["non_content_intent"] == "pullback_chat"
+
+
+def test_turn_classify_llm_payload_includes_future_question_option_summary() -> None:
+    question_catalog = {
+        "question_order": ["question-01", "question-05", "question-06"],
+        "question_index": {
+            "question-01": {
+                "question_id": "question-01",
+                "title": "您的年龄段？",
+                "input_type": "radio",
+                "options": [
+                    {"option_id": "A", "label": "18-24 岁", "aliases": []},
+                    {"option_id": "B", "label": "25-34 岁", "aliases": []},
+                ],
+                "tags": ["基础信息"],
+                "metadata": {"matching_hints": ["年龄"]},
+            },
+            "question-05": {
+                "question_id": "question-05",
+                "title": "遇到压力或重要事情，您的睡眠会受影响吗？",
+                "input_type": "radio",
+                "options": [
+                    {"option_id": "E", "label": "大脑停不下来，几乎睡不着", "aliases": []},
+                ],
+                "tags": ["人格判定"],
+                "metadata": {"matching_hints": ["压力", "睡眠"]},
+            },
+            "question-06": {
+                "question_id": "question-06",
+                "title": "您对卧室里的光线、声音敏感度如何？",
+                "input_type": "radio",
+                "options": [
+                    {"option_id": "B", "label": "轻微敏感，但影响不大", "aliases": []},
+                ],
+                "tags": ["人格判定"],
+                "metadata": {"matching_hints": ["声光", "敏感"]},
+            },
+        },
+    }
+    provider = FakeLLMProvider(
+        responses={
+            "layer1/turn_classify.md": """
+            {
+              "main_branch": "content",
+              "non_content_intent": "none",
+              "normalized_input": "大脑停不下来，几乎睡不着"
+            }
+            """
+        }
+    )
+    graph_state = create_graph_state(
+        session_id="session-l1-payload",
+        channel="grpc",
+        quiz_mode="dynamic",
+        question_catalog=question_catalog,
+        language_preference="zh-CN",
+    )
+    graph_state["runtime"]["llm_provider"] = provider
+
+    TurnClassifyNode().run(
+        graph_state,
+        TurnInput(
+            session_id="session-l1-payload",
+            channel="grpc",
+            input_mode="message",
+            raw_input="大脑停不下来，几乎睡不着",
+            language_preference="zh-CN",
+        ),
+    )
+
+    prompt_text = provider.calls[0][1]
+    assert "question_catalog_summary" in prompt_text
+    assert "大脑停不下来，几乎睡不着" in prompt_text
+    assert "轻微敏感，但影响不大" in prompt_text

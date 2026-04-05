@@ -739,5 +739,261 @@ def test_content_understand_resumes_skipped_partial_schedule_on_missing_field(
             "winner_question_id": "question-02",
             "needs_attribution": False,
             "raw_extracted_value": {"wake_time": "09:00"},
+            "selected_options": [],
+            "input_value": "",
+            "field_updates": {"wake_time": "09:00"},
+            "missing_fields": [],
         }
     ]
+
+
+def test_content_understand_rule_maps_dynamic_radio_text_to_selected_option() -> None:
+    question_catalog = {
+        "question_order": ["custom-01"],
+        "question_index": {
+            "custom-01": {
+                "question_id": "custom-01",
+                "title": "您对卧室里的光线、声音敏感度如何？",
+                "description": "",
+                "input_type": "radio",
+                "options": [
+                    {"option_id": "A", "label": "完全不敏感，在哪都能睡", "aliases": []},
+                    {"option_id": "B", "label": "轻微敏感，但影响不大", "aliases": []},
+                    {"option_id": "C", "label": "需要相对安静和避光的环境", "aliases": []},
+                    {"option_id": "D", "label": "一点微光或细小声音就会惊醒", "aliases": []},
+                    {"option_id": "E", "label": "必须绝对黑暗安静", "aliases": []},
+                ],
+                "tags": ["sleep"],
+                "metadata": {
+                    "allow_partial": False,
+                    "structured_kind": "radio",
+                    "response_style": "default",
+                    "matching_hints": ["敏感", "光线", "声音"],
+                },
+            }
+        },
+    }
+    graph_state = create_graph_state(
+        session_id="session-dynamic-radio",
+        channel="grpc",
+        quiz_mode="dynamic",
+        question_catalog=question_catalog,
+        language_preference="zh-CN",
+    )
+    graph_state["session_memory"]["current_question_id"] = "custom-01"
+    graph_state["session_memory"]["pending_question_ids"] = ["custom-01"]
+
+    understood = ContentUnderstandNode().run(
+        graph_state,
+        TurnInput(
+            session_id="session-dynamic-radio",
+            channel="grpc",
+            input_mode="message",
+            raw_input="一点微光或细小声音就会惊醒",
+            language_preference="zh-CN",
+        ),
+    )
+
+    assert understood["clarification_needed"] is False
+    assert understood["content_units"] == [
+        {
+            "unit_id": "unit-1",
+            "unit_text": "一点微光或细小声音就会惊醒",
+            "action_mode": "answer",
+            "candidate_question_ids": ["custom-01"],
+            "winner_question_id": "custom-01",
+            "needs_attribution": False,
+            "raw_extracted_value": "一点微光或细小声音就会惊醒",
+            "selected_options": ["D"],
+            "input_value": "",
+            "field_updates": {},
+            "missing_fields": [],
+        }
+    ]
+
+
+def test_content_apply_consumes_preselected_options_without_remapping() -> None:
+    question_catalog = {
+        "question_order": ["custom-01"],
+        "question_index": {
+            "custom-01": {
+                "question_id": "custom-01",
+                "title": "您对卧室里的光线、声音敏感度如何？",
+                "description": "",
+                "input_type": "radio",
+                "options": [
+                    {"option_id": "A", "label": "完全不敏感，在哪都能睡", "aliases": []},
+                    {"option_id": "B", "label": "轻微敏感，但影响不大", "aliases": []},
+                    {"option_id": "C", "label": "需要相对安静和避光的环境", "aliases": []},
+                    {"option_id": "D", "label": "一点微光或细小声音就会惊醒", "aliases": []},
+                    {"option_id": "E", "label": "必须绝对黑暗安静", "aliases": []},
+                ],
+                "tags": ["sleep"],
+                "metadata": {
+                    "allow_partial": False,
+                    "structured_kind": "radio",
+                    "response_style": "default",
+                    "matching_hints": ["敏感", "光线", "声音"],
+                },
+            }
+        },
+    }
+    graph_state = create_graph_state(
+        session_id="session-preselected-radio",
+        channel="grpc",
+        quiz_mode="dynamic",
+        question_catalog=question_catalog,
+        language_preference="zh-CN",
+    )
+
+    result = ContentApplyNode().run(
+        graph_state,
+        [
+            {
+                "unit_id": "unit-1",
+                "unit_text": "很敏感",
+                "action_mode": "answer",
+                "candidate_question_ids": ["custom-01"],
+                "winner_question_id": "custom-01",
+                "needs_attribution": False,
+                "raw_extracted_value": "很敏感",
+                "selected_options": ["D"],
+                "input_value": "",
+                "field_updates": {},
+                "missing_fields": [],
+            }
+        ],
+    )
+
+    answer = result["state_patch"]["session_memory"]["answered_records"]["custom-01"]
+    assert result["applied_question_ids"] == ["custom-01"]
+    assert answer["selected_options"] == ["D"]
+    assert answer["input_value"] == ""
+
+
+def test_content_understand_llm_can_return_selected_options_for_dynamic_radio() -> None:
+    question_catalog = {
+        "question_order": ["custom-02"],
+        "question_index": {
+            "custom-02": {
+                "question_id": "custom-02",
+                "title": "遇到压力或重要事情，您的睡眠会受影响吗？",
+                "description": "",
+                "input_type": "radio",
+                "options": [
+                    {"option_id": "A", "label": "毫无影响，倒头就睡", "aliases": []},
+                    {"option_id": "B", "label": "略有波动，但入睡时间不会变太长", "aliases": []},
+                    {"option_id": "C", "label": "会翻来覆去一阵子才能睡着", "aliases": []},
+                    {"option_id": "D", "label": "显著紧张，伴有心跳快或身体紧绷", "aliases": []},
+                    {"option_id": "E", "label": "大脑停不下来，几乎睡不着", "aliases": []},
+                ],
+                "tags": ["sleep"],
+                "metadata": {
+                    "allow_partial": False,
+                    "structured_kind": "radio",
+                    "response_style": "default",
+                    "matching_hints": ["压力", "睡眠"],
+                },
+            }
+        },
+    }
+    graph_state = create_graph_state(
+        session_id="session-llm-radio",
+        channel="grpc",
+        quiz_mode="dynamic",
+        question_catalog=question_catalog,
+        language_preference="zh-CN",
+    )
+    graph_state["session_memory"]["current_question_id"] = "custom-02"
+    graph_state["session_memory"]["pending_question_ids"] = ["custom-02"]
+    graph_state["runtime"]["llm_provider"] = FakeLLMProvider(
+        responses={
+            "layer2/content_understand.md": """
+            {
+              "content_units": [
+                {
+                  "unit_id": "unit-1",
+                  "unit_text": "大脑停不下来，几乎睡不着",
+                  "action_mode": "answer",
+                  "candidate_question_ids": ["custom-02"],
+                  "winner_question_id": "custom-02",
+                  "needs_attribution": false,
+                  "raw_extracted_value": "大脑停不下来，几乎睡不着",
+                  "selected_options": ["E"],
+                  "input_value": "",
+                  "field_updates": {},
+                  "missing_fields": []
+                }
+              ],
+              "clarification_needed": false,
+              "clarification_reason": null
+            }
+            """
+        }
+    )
+
+    understood = ContentUnderstandNode().run(
+        graph_state,
+        TurnInput(
+            session_id="session-llm-radio",
+            channel="grpc",
+            input_mode="message",
+            raw_input="大脑停不下来，几乎睡不着",
+            language_preference="zh-CN",
+        ),
+    )
+
+    assert understood["content_units"][0]["selected_options"] == ["E"]
+    assert understood["content_units"][0]["input_value"] == ""
+
+
+def test_content_branch_maps_sensitive_spoken_phrase_for_current_radio_question() -> None:
+    question_catalog = {
+        "question_order": ["custom-01"],
+        "question_index": {
+            "custom-01": {
+                "question_id": "custom-01",
+                "title": "您对卧室里的光线、声音敏感度如何？",
+                "description": "",
+                "input_type": "radio",
+                "options": [
+                    {"option_id": "A", "label": "完全不敏感，在哪都能睡", "aliases": []},
+                    {"option_id": "B", "label": "轻微敏感，但影响不大", "aliases": []},
+                    {"option_id": "C", "label": "需要相对安静和避光的环境", "aliases": []},
+                    {"option_id": "D", "label": "一点微光或细小声音就会惊醒", "aliases": []},
+                    {"option_id": "E", "label": "必须绝对黑暗安静", "aliases": []},
+                ],
+                "tags": ["sleep"],
+                "metadata": {
+                    "allow_partial": False,
+                    "structured_kind": "radio",
+                    "response_style": "default",
+                    "matching_hints": ["敏感", "光线", "声音"],
+                },
+            }
+        },
+    }
+    graph_state = create_graph_state(
+        session_id="session-spoken-sensitive",
+        channel="grpc",
+        quiz_mode="dynamic",
+        question_catalog=question_catalog,
+        language_preference="zh-CN",
+    )
+    graph_state["session_memory"]["current_question_id"] = "custom-01"
+    graph_state["session_memory"]["pending_question_ids"] = ["custom-01"]
+
+    result = ContentBranch().run(
+        graph_state,
+        TurnInput(
+            session_id="session-spoken-sensitive",
+            channel="grpc",
+            input_mode="message",
+            raw_input="很敏感",
+            language_preference="zh-CN",
+        ),
+    )
+
+    answer = result["state_patch"]["session_memory"]["answered_records"]["custom-01"]
+    assert result["applied_question_ids"] == ["custom-01"]
+    assert answer["selected_options"] == ["D"]
