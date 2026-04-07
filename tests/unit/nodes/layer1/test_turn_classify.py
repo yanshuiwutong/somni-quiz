@@ -306,3 +306,55 @@ def test_turn_classify_llm_payload_includes_future_question_option_summary() -> 
     assert "question_catalog_summary" in prompt_text
     assert "大脑停不下来，几乎睡不着" in prompt_text
     assert "轻微敏感，但影响不大" in prompt_text
+
+
+def test_turn_classify_overrides_pullback_for_catalog_answer_like_text() -> None:
+    question_catalog = {
+        "question_order": ["question-05"],
+        "question_index": {
+            "question-05": {
+                "question_id": "question-05",
+                "title": "遇到压力或重要事情，您的睡眠会受影响吗？",
+                "input_type": "radio",
+                "options": [
+                    {"option_id": "D", "label": "显著紧张，伴有心跳快或身体紧绷", "aliases": []},
+                    {"option_id": "E", "label": "大脑停不下来，几乎睡不着", "aliases": []},
+                ],
+                "tags": ["人格判定"],
+                "metadata": {"matching_hints": ["压力", "睡眠"]},
+            }
+        },
+    }
+    provider = FakeLLMProvider(
+        responses={
+            "layer1/turn_classify.md": """
+            {
+              "main_branch": "non_content",
+              "non_content_intent": "pullback_chat",
+              "normalized_input": "压力很大睡不着"
+            }
+            """
+        }
+    )
+    graph_state = create_graph_state(
+        session_id="session-l1-guard",
+        channel="grpc",
+        quiz_mode="dynamic",
+        question_catalog=question_catalog,
+        language_preference="zh-CN",
+    )
+    graph_state["runtime"]["llm_provider"] = provider
+
+    result = TurnClassifyNode().run(
+        graph_state,
+        TurnInput(
+            session_id="session-l1-guard",
+            channel="grpc",
+            input_mode="message",
+            raw_input="压力很大睡不着",
+            language_preference="zh-CN",
+        ),
+    )
+
+    assert result["state_patch"]["turn"]["main_branch"] == "content"
+    assert result["state_patch"]["turn"]["non_content_intent"] == "none"

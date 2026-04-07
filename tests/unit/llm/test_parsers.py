@@ -11,6 +11,18 @@ def test_parse_json_object_accepts_object_payload() -> None:
     assert parsed == {"main_branch": "content"}
 
 
+def test_parse_json_object_accepts_fenced_json_payload() -> None:
+    parsed = parse_json_object('```json\n{"main_branch": "content"}\n```')
+
+    assert parsed == {"main_branch": "content"}
+
+
+def test_parse_json_object_accepts_text_wrapped_fenced_json_payload() -> None:
+    parsed = parse_json_object('Result:\n```json\n{"main_branch": "content"}\n```\nDone.')
+
+    assert parsed == {"main_branch": "content"}
+
+
 def test_parse_json_object_rejects_non_object_payload() -> None:
     try:
         parse_json_object('["content"]')

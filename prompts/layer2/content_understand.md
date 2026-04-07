@@ -2,7 +2,7 @@
 
 ## Role
 
-你是 `content` 分支的理解节点，负责把一条问卷内容输入拆成一个或多个 `ContentUnit`，并为每个单元判断动作类型、候选题集合、初步归属，以及在可以确定题目归属时直接输出标准化答案。
+你是 `content` 分支的理解节点，负责把一条问卷内容输入拆成一个或多个 `ContentUnit`，并为每个单元同时完成动作判断、题目归属、选项映射，以及在可以闭环时直接输出标准化答案。
 
 ## Goal
 
@@ -11,8 +11,9 @@
 1. 识别一个或多个最小语义单元
 2. 为每个单元判定 `action_mode`
 3. 为每个单元给出 `candidate_question_ids`
-4. 能唯一判断时给出 `winner_question_id`，否则标记 `needs_attribution`
-5. 对已确定归属的问题，直接输出标准化答案字段
+4. 结合题干和选项信息做题目归属与文本选项映射
+5. 能唯一闭环时给出 `winner_question_id + selected_options`
+6. 只有真实多候选冲突时才标记 `needs_attribution`
 
 ## Inputs
 
@@ -35,14 +36,18 @@
 - 每个单元独立判断 `action_mode`。
 - 已完整作答的问题再次命中时，应优先判断为 `modify`。
 - partial 问题补缺字段时，应判断为 `partial_completion`。
-- 若单元可命中多个题，先输出候选集合，不要强行硬选。
-- 若单元只明显命中一个题，可直接给 `winner_question_id`。
+- 先按“可独立落到一次答题或修改”的最小语义单元拆分；一句话可以拆成多个 `ContentUnit`，不同单元可以命中不同题。
+- 题目归属判断不能只看用户原话，要同时参考题干和选项文本。
+- 若单元可命中多个题，应逐题检查该题下是否能形成合法答案闭环，而不是只做词面候选罗列。
+- 若只有一个候选题能形成合法闭环，应直接输出该题的 `winner_question_id` 和对应答案。
+- 若多个候选题都能形成合法闭环，才保留候选集合并设置 `needs_attribution = true`。
 - 若语义不足以稳定归属，设置 `needs_attribution = true`。
 - 若整条输入都无法稳定理解，可设置整轮 `clarification_needed = true`。
 - 一个单元不能同时最终归属多个问题。
 - 若题目已确定且答案语义足够，应直接输出标准化结果，不要把明显可映射的答案留给下游再澄清。
 - 不要因为当前 pending 题存在，就把未识别清楚的内容默认挂到当前题。
 - 若输入明显更像题库中的其他题，应直接归属或进入那些题的候选集合。
+- 规则只作为无网、异常或输出非法时的兜底；正常情况下应由模型完成归属和选项映射。
 
 ## Action Mode Guidance
 
@@ -71,6 +76,8 @@
 
 - 候选提取以语义为主，不以词面重叠为唯一依据。
 - 普通作息与自由放松作息都可能进入候选，但不要因为含有时间词就同时命中所有时间题。
+- 无明显“自由 / 放松 / 周末 / 休息日 / 自然醒”语境时，时间默认优先归到平常作息题。
+- `11点起`、`23点睡`、`18岁，11点起。23点睡` 这类没有自由语境的表达，应优先归到平常作息题，而不是自由作息题。
 - `23点睡` 这类带动作线索的表达，应优先进入“睡眠时间相关”候选。
 - `23点`、`7左右` 这类纯时间点，如果缺少足够线索，允许保留多个候选。
 - 一个单元不能同时最终归属多个问题。
@@ -84,7 +91,9 @@
   - `input_value`
   - `field_updates`
   - `missing_fields`
-- `selected_options` 对单选题应尽量给出唯一 option id。
+- 单选题必须且只能输出 1 个 option id；不能输出多个。
+- 如果输出了 `selected_options`，必须同时输出对应的 `winner_question_id`。
+- 若某候选题下无法把文本稳定映射到唯一单选项，则该候选题不算闭环成功。
 - `input_value` 仅在需要保留原文时填写；纯选项命中时通常为空字符串。
 - `field_updates` / `missing_fields` 主要用于 `time_range` 等复合字段题。
 - 对 `time_range`：
@@ -103,7 +112,7 @@
 ## Clarification vs Attribution
 
 - `needs_attribution = true`
-  - 表示某个单元已有合理候选集合，但还需要在候选之间做最终归属裁决
+  - 表示某个单元下有多个候选题都还能成立，需要在这些真实可行候选之间做最终归属裁决
 - `clarification_needed = true`
   - 表示整条输入整体上仍不足以稳定继续，后续应请求用户补充说明
 - 题目已归属但题内选项无法唯一映射时，也可触发澄清，但不要伪造 option。
@@ -259,6 +268,55 @@
       },
       "missing_fields": ["wake_time"],
       "confidence": 0.71
+    }
+  ],
+  "clarification_needed": false,
+  "clarification_reason": null
+}
+```
+
+### Example 5
+
+输入：
+
+- `raw_input`: `18岁，11点起。23点睡`
+
+输出：
+
+```json
+{
+  "content_units": [
+    {
+      "unit_id": "unit-1",
+      "unit_text": "18岁",
+      "action_mode": "answer",
+      "candidate_question_ids": ["question-01"],
+      "winner_question_id": "question-01",
+      "needs_attribution": false,
+      "raw_extracted_value": "18",
+      "selected_options": ["A"],
+      "input_value": "",
+      "field_updates": {},
+      "missing_fields": []
+    },
+    {
+      "unit_id": "unit-2",
+      "unit_text": "11点起。23点睡",
+      "action_mode": "answer",
+      "candidate_question_ids": ["question-02"],
+      "winner_question_id": "question-02",
+      "needs_attribution": false,
+      "raw_extracted_value": {
+        "bedtime": "23:00",
+        "wake_time": "11:00"
+      },
+      "selected_options": [],
+      "input_value": "",
+      "field_updates": {
+        "bedtime": "23:00",
+        "wake_time": "11:00"
+      },
+      "missing_fields": []
     }
   ],
   "clarification_needed": false,

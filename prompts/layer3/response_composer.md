@@ -26,6 +26,7 @@
 - `non_content_intent`
 - `response_language`
 - `turn_outcome`
+- `updated_answer_record`
 - `response_facts`
 - `current_question`
 - `next_question`
@@ -139,7 +140,9 @@
 ### `completed`
 
 - 确认问卷已完成
-- 给出结束态总结
+- 基于 `updated_answer_record` 给出结束态总结
+- 文案应比普通确认更完整，允许使用“感谢你的分享”“专属声、光、香睡眠方案/处方”这类收束表达
+- 可以做温和个性化概括，但只能使用已回答信息，不得编造未确认结论
 - 温暖收束，但不生成未确认结论
 
 ## Output Contract

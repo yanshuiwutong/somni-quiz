@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 from somni_graph_quiz.llm.invocation import invoke_json
 from somni_graph_quiz.llm.prompt_loader import PromptLoader
@@ -10,6 +11,7 @@ from somni_graph_quiz.runtime.context_builder import build_llm_memory_view
 
 
 _PROMPTS_ROOT = Path(__file__).resolve().parents[4] / "prompts"
+_NORMALIZE_PATTERN = re.compile(r"[\s,，。；;：:、.!?？“”\"'`~\\-_/]+")
 
 
 class TurnClassifyNode:
@@ -67,6 +69,13 @@ class TurnClassifyNode:
                 candidate=llm_output.get("non_content_intent"),
                 normalized_input=normalized_input,
             )
+            if (
+                main_branch == "non_content"
+                and non_content_intent == "pullback_chat"
+                and self._looks_like_catalog_answer(graph_state["question_catalog"], normalized_input)
+            ):
+                main_branch = "content"
+                non_content_intent = "none"
             return {
                 "state_patch": {
                     "turn": {
@@ -195,3 +204,46 @@ class TurnClassifyNode:
             return candidate
         _, fallback_intent = self._classify(normalized_input)
         return fallback_intent if fallback_intent != "none" else "pullback_chat"
+
+    def _looks_like_catalog_answer(self, question_catalog: dict, normalized_input: str) -> bool:
+        normalized_text = self._normalize_for_overlap(normalized_input)
+        if len(normalized_text) < 4:
+            return False
+        input_ngrams = self._ngrams(normalized_text)
+        if len(input_ngrams) < 2:
+            return False
+
+        for question in question_catalog.get("question_index", {}).values():
+            catalog_text = self._question_catalog_text(question)
+            if not catalog_text:
+                continue
+            if normalized_text in catalog_text or catalog_text in normalized_text:
+                return True
+            overlap = sum(1 for token in input_ngrams if token in catalog_text)
+            if overlap >= 2:
+                return True
+        return False
+
+    def _question_catalog_text(self, question: dict) -> str:
+        parts = [
+            str(question.get("title", "")),
+            *[str(tag) for tag in question.get("tags", [])],
+            *[str(item) for item in question.get("metadata", {}).get("matching_hints", [])],
+            *[
+                str(option.get("label", option.get("option_text", "")))
+                for option in question.get("options", [])
+            ],
+        ]
+        return self._normalize_for_overlap("".join(parts))
+
+    def _normalize_for_overlap(self, value: str) -> str:
+        return _NORMALIZE_PATTERN.sub("", value).lower()
+
+    def _ngrams(self, value: str) -> set[str]:
+        lengths = (2, 3, 4)
+        return {
+            value[index : index + size]
+            for size in lengths
+            for index in range(max(0, len(value) - size + 1))
+            if len(value[index : index + size]) == size
+        }

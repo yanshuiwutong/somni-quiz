@@ -292,3 +292,73 @@ def test_response_composer_clarification_uses_identified_sensitivity_question() 
     message = ResponseComposerNode().run(finalized)
 
     assert "光线" in message or "声音" in message or "敏感度" in message
+
+
+def test_response_composer_completed_uses_longer_fallback_message() -> None:
+    finalized = create_finalized_turn_context(
+        turn_outcome="completed",
+        updated_answer_record={
+            "answers": [
+                {"question_id": "question-01", "input_value": "18"},
+                {
+                    "question_id": "question-02",
+                    "field_updates": {"bedtime": "23:00", "wake_time": "07:00"},
+                    "input_value": "",
+                },
+            ]
+        },
+        updated_question_states={},
+        current_question_id=None,
+        next_question=None,
+        finalized=True,
+        response_language="zh-CN",
+        response_facts={},
+    )
+
+    message = ResponseComposerNode().run(finalized)
+
+    assert "感谢" in message
+    assert "睡眠" in message
+    assert "方案" in message or "处方" in message
+    assert len(message) >= 30
+
+
+def test_response_composer_completed_uses_llm_personalized_message_with_answer_record() -> None:
+    provider = FakeLLMProvider(
+        responses={
+            "layer3/response_composer.md": """
+            {
+              "assistant_message": "感谢你的分享。我已经大致了解了你的睡眠习惯，接下来会结合你记录下来的作息节律，为你整理更适合你的专属声、光、香睡眠方案。"
+            }
+            """
+        }
+    )
+    finalized = create_finalized_turn_context(
+        turn_outcome="completed",
+        updated_answer_record={
+            "answers": [
+                {"question_id": "question-01", "input_value": "18"},
+                {
+                    "question_id": "question-02",
+                    "field_updates": {"bedtime": "23:00", "wake_time": "07:00"},
+                    "input_value": "",
+                },
+            ]
+        },
+        updated_question_states={},
+        current_question_id=None,
+        next_question=None,
+        finalized=True,
+        response_language="zh-CN",
+        response_facts={
+            "llm_provider": provider,
+            "llm_available": True,
+        },
+    )
+
+    message = ResponseComposerNode().run(finalized)
+
+    assert "专属声、光、香睡眠方案" in message
+    assert len(provider.calls) == 1
+    assert "question-02" in provider.calls[0][1]
+    assert "23:00" in provider.calls[0][1]

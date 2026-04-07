@@ -138,6 +138,108 @@ def test_content_understand_uses_llm_output_to_split_multi_question_turn(
     ]
 
 
+def test_content_understand_defaults_plain_times_to_regular_schedule_without_relaxed_context(
+    question_catalog: dict,
+) -> None:
+    graph_state = create_graph_state(
+        session_id="session-plain-regular-schedule",
+        channel="grpc",
+        quiz_mode="dynamic",
+        question_catalog=question_catalog,
+        language_preference="zh-CN",
+    )
+
+    understood = ContentUnderstandNode().run(
+        graph_state,
+        TurnInput(
+            session_id="session-plain-regular-schedule",
+            channel="grpc",
+            input_mode="message",
+            raw_input="18岁，11点起。23点睡",
+            language_preference="zh-CN",
+        ),
+    )
+
+    assert [unit["winner_question_id"] for unit in understood["content_units"]] == [
+        "question-01",
+        "question-02",
+    ]
+    schedule_unit = understood["content_units"][1]
+    assert schedule_unit["candidate_question_ids"] == ["question-02"]
+    assert schedule_unit["field_updates"] == {"bedtime": "23:00", "wake_time": "11:00"}
+
+
+def test_content_understand_overrides_llm_free_schedule_misattribution_without_relaxed_context(
+    question_catalog: dict,
+) -> None:
+    graph_state = create_graph_state(
+        session_id="session-llm-regular-schedule-override",
+        channel="grpc",
+        quiz_mode="dynamic",
+        question_catalog=question_catalog,
+        language_preference="zh-CN",
+    )
+    graph_state["runtime"]["llm_provider"] = FakeLLMProvider(
+        responses={
+            "layer2/content_understand.md": """
+            {
+              "content_units": [
+                {
+                  "unit_id": "unit-1",
+                  "unit_text": "18岁",
+                  "action_mode": "answer",
+                  "candidate_question_ids": ["question-01"],
+                  "winner_question_id": "question-01",
+                  "needs_attribution": false,
+                  "raw_extracted_value": "18"
+                },
+                {
+                  "unit_id": "unit-2",
+                  "unit_text": "11点起。23点睡",
+                  "action_mode": "answer",
+                  "candidate_question_ids": ["question-03"],
+                  "winner_question_id": "question-03",
+                  "needs_attribution": false,
+                  "raw_extracted_value": {
+                    "bedtime": "23:00",
+                    "wake_time": "11:00"
+                  },
+                  "selected_options": [],
+                  "input_value": "",
+                  "field_updates": {
+                    "bedtime": "23:00",
+                    "wake_time": "11:00"
+                  },
+                  "missing_fields": []
+                }
+              ],
+              "clarification_needed": false,
+              "clarification_reason": null
+            }
+            """
+        }
+    )
+
+    understood = ContentUnderstandNode().run(
+        graph_state,
+        TurnInput(
+            session_id="session-llm-regular-schedule-override",
+            channel="grpc",
+            input_mode="message",
+            raw_input="18岁，11点起。23点睡",
+            language_preference="zh-CN",
+        ),
+    )
+
+    assert [unit["winner_question_id"] for unit in understood["content_units"]] == [
+        "question-01",
+        "question-02",
+    ]
+    schedule_unit = understood["content_units"][1]
+    assert schedule_unit["candidate_question_ids"] == ["question-02"]
+    assert schedule_unit["field_updates"] == {"bedtime": "23:00", "wake_time": "11:00"}
+
+
 def test_content_branch_handles_same_turn_answer_and_modify(question_catalog: dict) -> None:
     graph_state = create_graph_state(
         session_id="session-2",
@@ -997,3 +1099,352 @@ def test_content_branch_maps_sensitive_spoken_phrase_for_current_radio_question(
     answer = result["state_patch"]["session_memory"]["answered_records"]["custom-01"]
     assert result["applied_question_ids"] == ["custom-01"]
     assert answer["selected_options"] == ["D"]
+
+
+def test_content_branch_skips_attribution_for_single_candidate_closed_by_understand() -> None:
+    question_catalog = {
+        "question_order": ["question-05"],
+        "question_index": {
+            "question-05": {
+                "question_id": "question-05",
+                "title": "遇到压力或重要事情，您的睡眠会受影响吗？",
+                "description": "",
+                "input_type": "radio",
+                "options": [
+                    {"option_id": "A", "label": "毫无影响，倒头就睡", "aliases": []},
+                    {"option_id": "E", "label": "大脑停不下来，几乎睡不着", "aliases": []},
+                ],
+                "tags": ["sleep"],
+                "metadata": {
+                    "allow_partial": False,
+                    "structured_kind": "radio",
+                    "response_style": "default",
+                    "matching_hints": ["压力", "睡眠"],
+                },
+            }
+        },
+    }
+    graph_state = create_graph_state(
+        session_id="session-branch-skip-attribution",
+        channel="grpc",
+        quiz_mode="dynamic",
+        question_catalog=question_catalog,
+        language_preference="zh-CN",
+    )
+    graph_state["session_memory"]["current_question_id"] = "question-05"
+    graph_state["session_memory"]["pending_question_ids"] = ["question-05"]
+
+    branch = ContentBranch()
+
+    def _fake_understand(_graph_state: dict, _turn_input: TurnInput) -> dict:
+        return {
+            "content_units": [
+                {
+                    "unit_id": "unit-1",
+                    "unit_text": "大脑停不下来，几乎睡不着",
+                    "action_mode": "answer",
+                    "candidate_question_ids": ["question-05"],
+                    "winner_question_id": None,
+                    "needs_attribution": True,
+                    "raw_extracted_value": "大脑停不下来，几乎睡不着",
+                    "selected_options": ["E"],
+                    "input_value": "",
+                    "field_updates": {},
+                    "missing_fields": [],
+                }
+            ],
+            "clarification_needed": False,
+            "clarification_reason": None,
+        }
+
+    def _fail_attribution(_graph_state: dict, _content_unit: dict) -> dict:
+        raise AssertionError("FinalAttributionNode should not run for a single closed candidate")
+
+    branch._understand.run = _fake_understand  # type: ignore[method-assign]
+    branch._attribution.run = _fail_attribution  # type: ignore[method-assign]
+
+    result = branch.run(
+        graph_state,
+        TurnInput(
+            session_id="session-branch-skip-attribution",
+            channel="grpc",
+            input_mode="message",
+            raw_input="大脑停不下来，几乎睡不着",
+            language_preference="zh-CN",
+        ),
+    )
+
+    assert result["applied_question_ids"] == ["question-05"]
+    answer = result["state_patch"]["session_memory"]["answered_records"]["question-05"]
+    assert answer["selected_options"] == ["E"]
+
+def test_content_branch_skips_attribution_for_single_candidate_without_selected_options() -> None:
+    question_catalog = {
+        "question_order": ["question-05"],
+        "question_index": {
+            "question-05": {
+                "question_id": "question-05",
+                "title": "遇到压力或重要事情，您的睡眠会受影响吗？",
+                "description": "",
+                "input_type": "radio",
+                "options": [
+                    {"option_id": "A", "label": "毫无影响，倒头就睡", "aliases": []},
+                    {"option_id": "E", "label": "大脑停不下来，几乎睡不着", "aliases": []},
+                ],
+                "tags": ["sleep"],
+                "metadata": {
+                    "allow_partial": False,
+                    "structured_kind": "radio",
+                    "response_style": "default",
+                    "matching_hints": ["压力", "睡眠"],
+                },
+            }
+        },
+    }
+    graph_state = create_graph_state(
+        session_id="session-branch-skip-attribution-no-options",
+        channel="grpc",
+        quiz_mode="dynamic",
+        question_catalog=question_catalog,
+        language_preference="zh-CN",
+    )
+    graph_state["session_memory"]["current_question_id"] = "question-05"
+    graph_state["session_memory"]["pending_question_ids"] = ["question-05"]
+
+    branch = ContentBranch()
+
+    def _fake_understand(_graph_state: dict, _turn_input: TurnInput) -> dict:
+        return {
+            "content_units": [
+                {
+                    "unit_id": "unit-1",
+                    "unit_text": "大脑停不下来，几乎睡不着",
+                    "action_mode": "answer",
+                    "candidate_question_ids": ["question-05"],
+                    "winner_question_id": None,
+                    "needs_attribution": True,
+                    "raw_extracted_value": "大脑停不下来，几乎睡不着",
+                    "selected_options": [],
+                    "input_value": "",
+                    "field_updates": {},
+                    "missing_fields": [],
+                }
+            ],
+            "clarification_needed": False,
+            "clarification_reason": None,
+        }
+
+    def _fail_attribution(_graph_state: dict, _content_unit: dict) -> dict:
+        raise AssertionError("FinalAttributionNode should not run for single-candidate units")
+
+    branch._understand.run = _fake_understand  # type: ignore[method-assign]
+    branch._attribution.run = _fail_attribution  # type: ignore[method-assign]
+
+    result = branch.run(
+        graph_state,
+        TurnInput(
+            session_id="session-branch-skip-attribution-no-options",
+            channel="grpc",
+            input_mode="message",
+            raw_input="大脑停不下来，几乎睡不着",
+            language_preference="zh-CN",
+        ),
+    )
+
+    assert result["applied_question_ids"] == ["question-05"]
+
+def test_content_branch_skips_attribution_for_zero_candidate_units() -> None:
+    question_catalog = {
+        "question_order": ["question-05"],
+        "question_index": {
+            "question-05": {
+                "question_id": "question-05",
+                "title": "遇到压力或重要事情，您的睡眠会受影响吗？",
+                "description": "",
+                "input_type": "radio",
+                "options": [
+                    {"option_id": "A", "label": "毫无影响，倒头就睡", "aliases": []},
+                    {"option_id": "E", "label": "大脑停不下来，几乎睡不着", "aliases": []},
+                ],
+                "tags": ["sleep"],
+                "metadata": {
+                    "allow_partial": False,
+                    "structured_kind": "radio",
+                    "response_style": "default",
+                    "matching_hints": ["压力", "睡眠"],
+                },
+            }
+        },
+    }
+    graph_state = create_graph_state(
+        session_id="session-branch-skip-attribution-no-candidates",
+        channel="grpc",
+        quiz_mode="dynamic",
+        question_catalog=question_catalog,
+        language_preference="zh-CN",
+    )
+    graph_state["session_memory"]["current_question_id"] = "question-05"
+    graph_state["session_memory"]["pending_question_ids"] = ["question-05"]
+
+    branch = ContentBranch()
+
+    def _fake_understand(_graph_state: dict, _turn_input: TurnInput) -> dict:
+        return {
+            "content_units": [
+                {
+                    "unit_id": "unit-1",
+                    "unit_text": "大脑停不下来，几乎睡不着",
+                    "action_mode": "answer",
+                    "candidate_question_ids": [],
+                    "winner_question_id": None,
+                    "needs_attribution": True,
+                    "raw_extracted_value": "大脑停不下来，几乎睡不着",
+                    "selected_options": [],
+                    "input_value": "",
+                    "field_updates": {},
+                    "missing_fields": [],
+                }
+            ],
+            "clarification_needed": False,
+            "clarification_reason": None,
+        }
+
+    def _fail_attribution(_graph_state: dict, _content_unit: dict) -> dict:
+        raise AssertionError("FinalAttributionNode should not run for units without candidates")
+
+    branch._understand.run = _fake_understand  # type: ignore[method-assign]
+    branch._attribution.run = _fail_attribution  # type: ignore[method-assign]
+
+    result = branch.run(
+        graph_state,
+        TurnInput(
+            session_id="session-branch-skip-attribution-no-candidates",
+            channel="grpc",
+            input_mode="message",
+            raw_input="大脑停不下来，几乎睡不着",
+            language_preference="zh-CN",
+        ),
+    )
+
+    assert result["applied_question_ids"] == []
+
+
+def test_content_branch_uses_llm_option_mapping_after_attribution_resolution() -> None:
+    question_catalog = {
+        "question_order": ["question-05", "question-07", "question-08"],
+        "question_index": {
+            "question-05": {
+                "question_id": "question-05",
+                "title": "遇到压力或重要事情，您的睡眠会受影响吗？",
+                "description": "",
+                "input_type": "radio",
+                "options": [
+                    {"option_id": "A", "label": "毫无影响，倒头就睡", "aliases": []},
+                    {"option_id": "E", "label": "大脑停不下来，几乎睡不着", "aliases": []},
+                ],
+                "tags": ["sleep"],
+                "metadata": {
+                    "allow_partial": False,
+                    "structured_kind": "radio",
+                    "response_style": "default",
+                    "matching_hints": ["压力", "睡眠"],
+                },
+            },
+            "question-07": {
+                "question_id": "question-07",
+                "title": "最影响你睡好的问题是哪一个？",
+                "description": "",
+                "input_type": "radio",
+                "options": [
+                    {"option_id": "B", "label": "躺下很久才能睡着", "aliases": []},
+                ],
+                "tags": ["sleep"],
+                "metadata": {
+                    "allow_partial": False,
+                    "structured_kind": "radio",
+                    "response_style": "default",
+                    "matching_hints": ["入睡困难"],
+                },
+            },
+            "question-08": {
+                "question_id": "question-08",
+                "title": "半夜醒来后，再次入睡困难吗？",
+                "description": "",
+                "input_type": "radio",
+                "options": [
+                    {"option_id": "C", "label": "比较困难，需要 30 分钟以上", "aliases": []},
+                ],
+                "tags": ["sleep"],
+                "metadata": {
+                    "allow_partial": False,
+                    "structured_kind": "radio",
+                    "response_style": "default",
+                    "matching_hints": ["再次入睡"],
+                },
+            },
+        },
+    }
+    graph_state = create_graph_state(
+        session_id="session-llm-option-mapping",
+        channel="grpc",
+        quiz_mode="dynamic",
+        question_catalog=question_catalog,
+        language_preference="zh-CN",
+    )
+    graph_state["runtime"]["llm_provider"] = FakeLLMProvider(
+        responses={
+            "layer2/content_understand.md": """
+            {
+              "content_units": [
+                {
+                  "unit_id": "unit-1",
+                  "unit_text": "压力很大睡不着",
+                  "action_mode": "answer",
+                  "candidate_question_ids": ["question-05", "question-07", "question-08"],
+                  "winner_question_id": null,
+                  "needs_attribution": true,
+                  "raw_extracted_value": "压力导致入睡困难",
+                  "selected_options": [],
+                  "input_value": "压力很大睡不着",
+                  "field_updates": {},
+                  "missing_fields": []
+                }
+              ],
+              "clarification_needed": false,
+              "clarification_reason": null
+            }
+            """,
+            "layer2/final_attribution.md": """
+            {
+              "winner_question_id": "question-05",
+              "needs_clarification": false,
+              "reason": "pressure-related sleep impact is the best match"
+            }
+            """,
+            "layer2/text_option_mapping.md": """
+            {
+              "selected_options": ["E"],
+              "confidence": 0.93,
+              "reason": "pressure-driven inability to sleep best matches option E"
+            }
+            """,
+        }
+    )
+    graph_state["session_memory"]["current_question_id"] = "question-02"
+    graph_state["session_memory"]["pending_question_ids"] = ["question-02", "question-03", "question-04"]
+
+    result = ContentBranch().run(
+        graph_state,
+        TurnInput(
+            session_id="session-llm-option-mapping",
+            channel="grpc",
+            input_mode="message",
+            raw_input="压力很大睡不着",
+            language_preference="zh-CN",
+        ),
+    )
+
+    answer = result["state_patch"]["session_memory"]["answered_records"]["question-05"]
+    assert result["applied_question_ids"] == ["question-05"]
+    assert answer["selected_options"] == ["E"]
+    assert answer["input_value"] == ""

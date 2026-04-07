@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+import httpx
+
 
 @dataclass
 class FakeLLMProvider:
@@ -33,6 +35,8 @@ class RealLLMProvider:
     timeout: int
     reasoning_effort: str
     _client: Any | None = field(default=None, init=False, repr=False)
+    _http_client: httpx.Client | None = field(default=None, init=False, repr=False)
+    _http_async_client: httpx.AsyncClient | None = field(default=None, init=False, repr=False)
 
     def generate(self, prompt_key: str, prompt_text: str) -> str:
         """Generate text from the configured remote model."""
@@ -51,12 +55,16 @@ class RealLLMProvider:
         if self._client is None:
             from langchain_openai import ChatOpenAI
 
+            self._http_client = httpx.Client(timeout=self.timeout, trust_env=False)
+            self._http_async_client = httpx.AsyncClient(timeout=self.timeout, trust_env=False)
             kwargs: dict[str, Any] = {
                 "model": self.model,
                 "api_key": self.api_key,
                 "base_url": self.base_url,
                 "temperature": self.temperature,
                 "timeout": self.timeout,
+                "http_client": self._http_client,
+                "http_async_client": self._http_async_client,
             }
             if self.reasoning_effort:
                 kwargs["reasoning_effort"] = self.reasoning_effort

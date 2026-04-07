@@ -40,13 +40,19 @@ class GraphRuntimeEngine:
             "session_memory"
         ]["current_question_id"]
         pending_question = get_question(updated_graph_state["question_catalog"], pending_question_id)
+        final_result = None
+        if finalized.finalized:
+            final_result = {
+                "completion_message": assistant_message,
+                "finalized": True,
+            }
         return create_turn_result(
             updated_graph_state=updated_graph_state,
             answer_record=finalized.updated_answer_record,
             pending_question=pending_question,
             assistant_message=assistant_message,
             finalized=finalized.finalized,
-            final_result=None,
+            final_result=final_result,
         )
 
     def _append_recent_turn(

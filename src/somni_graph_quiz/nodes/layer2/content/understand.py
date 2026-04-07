@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import re
 from pathlib import Path
 
@@ -12,6 +14,7 @@ from somni_graph_quiz.utils.time_parse import parse_schedule_fragment
 
 
 _PROMPTS_ROOT = Path(__file__).resolve().parents[5] / "prompts"
+_DIAGNOSTIC_LOGGER = logging.getLogger("somni_graph_quiz.diagnostics.content_understand")
 
 _AGE_PATTERN = re.compile(r"(?P<age>\d{1,3})\s*岁")
 _AGE_CORRECTION_PATTERN = re.compile(r"(?:不是|改成|改为|改)\s*(?P<age>\d{1,3})")
@@ -42,23 +45,66 @@ class ContentUnderstandNode:
         if direct_answer_payload and direct_answer_payload.get("question_id"):
             return self._rule_understand(graph_state, turn_input, raw_input)
 
-        llm_output = self._try_llm(graph_state, turn_input)
+        llm_output, llm_attempt = self._try_llm(graph_state, turn_input)
         if llm_output is not None:
-            return self._standardize_understood(graph_state, llm_output)
-        return self._standardize_understood(
+            understood = self._standardize_understood(graph_state, llm_output)
+            understood["content_units"] = self._resolve_single_choice_units(
+                graph_state,
+                understood.get("content_units", []),
+            )
+            self._log_diagnostic(
+                "llm_result_consumed",
+                raw_input=raw_input,
+                llm_provider_available=llm_attempt["llm_provider_available"],
+                path="llm",
+                content_units=self._summarize_units(understood.get("content_units", [])),
+                clarification_needed=bool(understood.get("clarification_needed", False)),
+            )
+            self._log_diagnostic(
+                "content_units_standardized",
+                raw_input=raw_input,
+                path="llm",
+                content_units=self._summarize_units(understood.get("content_units", [])),
+                clarification_needed=bool(understood.get("clarification_needed", False)),
+            )
+            return understood
+        understood = self._standardize_understood(
             graph_state,
             self._rule_understand(graph_state, turn_input, raw_input),
         )
+        understood["content_units"] = self._resolve_single_choice_units(
+            graph_state,
+            understood.get("content_units", []),
+        )
+        self._log_diagnostic(
+            "rule_fallback_used",
+            raw_input=raw_input,
+            llm_provider_available=llm_attempt["llm_provider_available"],
+            path="rule",
+            fallback_reason=llm_attempt["event"],
+            content_units=self._summarize_units(understood.get("content_units", [])),
+            clarification_needed=bool(understood.get("clarification_needed", False)),
+        )
+        self._log_diagnostic(
+            "content_units_standardized",
+            raw_input=raw_input,
+            path="rule",
+            content_units=self._summarize_units(understood.get("content_units", [])),
+            clarification_needed=bool(understood.get("clarification_needed", False)),
+        )
+        return understood
 
     def standardize_content_unit(self, graph_state: dict, content_unit: dict) -> dict:
         """Normalize a resolved content unit into a storage-ready payload."""
-        question_id = content_unit.get("winner_question_id")
+        normalized = self._normalize_unit(content_unit, 1)
+        normalized = self._prefer_regular_schedule_question(graph_state, normalized)
+        normalized = self._resolve_single_choice_winner(graph_state, normalized)
+        question_id = normalized.get("winner_question_id")
         if not question_id:
-            return self._normalize_unit(content_unit, 1)
+            return normalized
         question = graph_state["question_catalog"]["question_index"].get(question_id)
         if not question:
-            return self._normalize_unit(content_unit, 1)
-        normalized = self._normalize_unit(content_unit, 1)
+            return normalized
         if normalized["selected_options"] or normalized["field_updates"] or normalized["missing_fields"]:
             return normalized
         mapped = map_content_answer(
@@ -66,6 +112,19 @@ class ContentUnderstandNode:
             normalized.get("raw_extracted_value", normalized.get("unit_text", "")),
             raw_text=normalized.get("unit_text", ""),
         )
+        if (
+            not mapped.get("selected_options")
+            and not mapped.get("field_updates")
+            and not mapped.get("missing_fields")
+            and self._is_single_choice_question(question)
+        ):
+            llm_mapped = self._try_llm_option_mapping(
+                graph_state,
+                question,
+                normalized.get("unit_text", ""),
+            )
+            if llm_mapped is not None:
+                mapped = llm_mapped
         field_updates = dict(mapped.get("field_updates", {}))
         missing_fields = list(mapped.get("missing_fields", []))
         if normalized.get("action_mode") == "partial_completion" and field_updates:
@@ -87,13 +146,44 @@ class ContentUnderstandNode:
             "missing_fields": missing_fields,
         }
 
-    def _try_llm(self, graph_state: dict, turn_input: object) -> dict | None:
+    def _prefer_regular_schedule_question(self, graph_state: dict, unit: dict) -> dict:
+        regular_schedule_question_id = "question-02"
+        question_index = graph_state["question_catalog"]["question_index"]
+        if regular_schedule_question_id not in question_index:
+            return unit
+        if self._has_relaxed_context(str(unit.get("unit_text", ""))):
+            return unit
+        if not self._looks_like_regular_schedule_unit(unit):
+            return unit
+        return {
+            **unit,
+            "candidate_question_ids": [regular_schedule_question_id],
+            "winner_question_id": regular_schedule_question_id,
+            "needs_attribution": False,
+        }
+
+    def _try_llm(self, graph_state: dict, turn_input: object) -> tuple[dict | None, dict]:
         runtime = graph_state["runtime"]
         provider = runtime.get("llm_provider")
+        raw_input = getattr(turn_input, "raw_input", "")
+        llm_provider_available = bool(runtime.get("llm_available", True) and provider is not None)
+        self._log_diagnostic(
+            "llm_attempt_started",
+            raw_input=raw_input,
+            llm_provider_available=llm_provider_available,
+        )
         if not runtime.get("llm_available", True) or provider is None:
-            return None
+            self._log_diagnostic(
+                "llm_unavailable",
+                raw_input=raw_input,
+                llm_provider_available=False,
+            )
+            return None, {
+                "event": "llm_unavailable",
+                "llm_provider_available": False,
+            }
         payload = {
-            "raw_input": getattr(turn_input, "raw_input", ""),
+            "raw_input": raw_input,
             "input_mode": getattr(turn_input, "input_mode", "message"),
             "direct_answer_payload": getattr(turn_input, "direct_answer_payload", None),
             "memory_view": self._build_memory_view(graph_state),
@@ -106,15 +196,46 @@ class ContentUnderstandNode:
                 prompt_key="layer2/content_understand.md",
                 prompt_text=prompt_text,
             )
-        except Exception:
-            return None
+        except Exception as exc:
+            self._log_diagnostic(
+                "llm_exception",
+                raw_input=raw_input,
+                llm_provider_available=True,
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+            )
+            return None, {
+                "event": "llm_exception",
+                "llm_provider_available": True,
+            }
         content_units = output.get("content_units")
         if not isinstance(content_units, list):
-            return None
-        return {
+            self._log_diagnostic(
+                "llm_invalid_schema",
+                raw_input=raw_input,
+                llm_provider_available=True,
+                output_keys=sorted(str(key) for key in output.keys()),
+                content_units_type=type(content_units).__name__,
+            )
+            return None, {
+                "event": "llm_invalid_schema",
+                "llm_provider_available": True,
+            }
+        understood = {
             "content_units": [self._normalize_unit(unit, index) for index, unit in enumerate(content_units, 1)],
             "clarification_needed": bool(output.get("clarification_needed", False)),
             "clarification_reason": output.get("clarification_reason"),
+        }
+        self._log_diagnostic(
+            "llm_result_received",
+            raw_input=raw_input,
+            llm_provider_available=True,
+            content_units=self._summarize_units(understood["content_units"]),
+            clarification_needed=understood["clarification_needed"],
+        )
+        return understood, {
+            "event": "llm_result_received",
+            "llm_provider_available": True,
         }
 
     def _rule_understand(self, graph_state: dict, turn_input: object, raw_input: str) -> dict:
@@ -292,6 +413,22 @@ class ContentUnderstandNode:
     def _has_relaxed_context(self, raw_input: str) -> bool:
         return any(token in raw_input for token in _RELAXED_CONTEXT_TOKENS)
 
+    def _looks_like_regular_schedule_unit(self, unit: dict) -> bool:
+        unit_text = str(unit.get("unit_text", ""))
+        if not any(token in unit_text for token in ("睡", "起", "醒", "上床", "下床")):
+            return False
+        raw_extracted_value = unit.get("raw_extracted_value")
+        if isinstance(raw_extracted_value, dict):
+            field_names = set(raw_extracted_value)
+            if "bedtime" in field_names or "wake_time" in field_names:
+                return True
+        field_updates = unit.get("field_updates", {})
+        if isinstance(field_updates, dict):
+            field_names = set(field_updates)
+            if "bedtime" in field_names or "wake_time" in field_names:
+                return True
+        return False
+
     def _extract_age_unit(self, session_memory: dict, raw_input: str) -> dict | None:
         question_id = "question-01"
         if question_id not in session_memory["question_states"]:
@@ -461,6 +598,27 @@ class ContentUnderstandNode:
         hints = [str(item).lower() for item in question.get("metadata", {}).get("matching_hints", [])]
         return any(token in {"年龄", "age"} for token in hints)
 
+    def _resolve_single_choice_winner(self, graph_state: dict, unit: dict) -> dict:
+        return self._resolve_single_choice_unit(graph_state, unit)
+
+    def _is_viable_single_choice_candidate(
+        self,
+        graph_state: dict,
+        question_id: str,
+        selected_options: list[str],
+    ) -> bool:
+        question = graph_state["question_catalog"]["question_index"].get(question_id)
+        if not question or not self._is_single_choice_question(question):
+            return False
+        option_ids = {
+            str(option.get("option_id", ""))
+            for option in question.get("options", [])
+            if str(option.get("option_id", ""))
+        }
+        if not option_ids:
+            return False
+        return all(option_id in option_ids for option_id in selected_options)
+
     def _normalize_unit(self, unit: dict, index: int) -> dict:
         return {
             "unit_id": unit.get("unit_id") or f"unit-{index}",
@@ -488,3 +646,285 @@ class ContentUnderstandNode:
             "clarification_question_title": understood.get("clarification_question_title"),
             "clarification_kind": understood.get("clarification_kind"),
         }
+
+    def _resolve_single_choice_units(self, graph_state: dict, content_units: list[dict]) -> list[dict]:
+        return [self._resolve_single_choice_unit(graph_state, unit) for unit in content_units]
+
+    def _resolve_single_choice_unit(self, graph_state: dict, unit: dict) -> dict:
+        winner_question_id = unit.get("winner_question_id")
+        candidate_question_ids = [str(question_id) for question_id in unit.get("candidate_question_ids", [])]
+        if winner_question_id and winner_question_id not in candidate_question_ids:
+            candidate_question_ids = [winner_question_id, *candidate_question_ids]
+        if not candidate_question_ids:
+            return unit
+
+        single_choice_candidates = [
+            question_id
+            for question_id in candidate_question_ids
+            if self._is_single_choice_question(
+                graph_state["question_catalog"]["question_index"].get(question_id),
+            )
+        ]
+        if not single_choice_candidates:
+            return unit
+
+        closures = self._resolve_single_choice_candidate_closures(
+            graph_state,
+            unit,
+            single_choice_candidates,
+        )
+        self._log_diagnostic(
+            "single_choice_candidate_closures_evaluated",
+            unit_id=unit.get("unit_id"),
+            candidate_question_ids=single_choice_candidates,
+            viable_closures=[
+                {
+                    "question_id": closure["question_id"],
+                    "selected_options": list(closure["selected_options"]),
+                }
+                for closure in closures
+            ],
+        )
+
+        if len(closures) == 1:
+            closure = closures[0]
+            return {
+                **unit,
+                "candidate_question_ids": [closure["question_id"]],
+                "winner_question_id": closure["question_id"],
+                "needs_attribution": False,
+                "selected_options": list(closure["selected_options"]),
+                "input_value": str(closure.get("input_value", "")),
+                "field_updates": dict(closure.get("field_updates", {})),
+                "missing_fields": list(closure.get("missing_fields", [])),
+            }
+        if len(closures) > 1:
+            return {
+                **unit,
+                "candidate_question_ids": [closure["question_id"] for closure in closures],
+                "winner_question_id": None,
+                "needs_attribution": True,
+                "selected_options": [],
+                "input_value": "",
+                "field_updates": {},
+                "missing_fields": [],
+            }
+
+        if winner_question_id:
+            question = graph_state["question_catalog"]["question_index"].get(winner_question_id)
+            if self._is_single_choice_question(question):
+                return {
+                    **unit,
+                    "needs_attribution": False,
+                    "selected_options": [],
+                    "input_value": "",
+                    "field_updates": {},
+                    "missing_fields": [],
+                }
+
+        if len(candidate_question_ids) == 1:
+            question_id = candidate_question_ids[0]
+            question = graph_state["question_catalog"]["question_index"].get(question_id)
+            if self._is_single_choice_question(question):
+                return {
+                    **unit,
+                    "candidate_question_ids": [question_id],
+                    "winner_question_id": question_id,
+                    "needs_attribution": False,
+                    "selected_options": [],
+                    "input_value": "",
+                    "field_updates": {},
+                    "missing_fields": [],
+                }
+
+        return {
+            **unit,
+            "selected_options": [],
+            "input_value": "",
+            "field_updates": dict(unit.get("field_updates", {})),
+            "missing_fields": list(unit.get("missing_fields", [])),
+        }
+
+    def _resolve_single_choice_candidate_closures(
+        self,
+        graph_state: dict,
+        unit: dict,
+        candidate_question_ids: list[str],
+    ) -> list[dict]:
+        closures: list[dict] = []
+        seen_question_ids: set[str] = set()
+        for question_id in candidate_question_ids:
+            if question_id in seen_question_ids:
+                continue
+            seen_question_ids.add(question_id)
+            closure = self._resolve_single_choice_candidate_closure(graph_state, unit, question_id)
+            if closure is not None:
+                closures.append(closure)
+        return closures
+
+    def _resolve_single_choice_candidate_closure(
+        self,
+        graph_state: dict,
+        unit: dict,
+        question_id: str,
+    ) -> dict | None:
+        question = graph_state["question_catalog"]["question_index"].get(question_id)
+        if not self._is_single_choice_question(question):
+            return None
+
+        existing_selection = self._normalize_single_choice_mapping(
+            question,
+            {
+                "selected_options": list(unit.get("selected_options", [])),
+                "input_value": str(unit.get("input_value", "")),
+                "field_updates": dict(unit.get("field_updates", {})),
+                "missing_fields": list(unit.get("missing_fields", [])),
+            },
+        )
+        if existing_selection is not None:
+            return {
+                "question_id": question_id,
+                **existing_selection,
+            }
+
+        mapped = map_content_answer(
+            question,
+            unit.get("raw_extracted_value", unit.get("unit_text", "")),
+            raw_text=unit.get("unit_text", ""),
+        )
+        normalized_mapped = self._normalize_single_choice_mapping(question, mapped)
+        if normalized_mapped is not None:
+            return {
+                "question_id": question_id,
+                **normalized_mapped,
+            }
+
+        llm_mapped = self._try_llm_option_mapping(
+            graph_state,
+            question,
+            unit.get("unit_text", ""),
+        )
+        normalized_llm = self._normalize_single_choice_mapping(question, llm_mapped)
+        if normalized_llm is None:
+            return None
+        return {
+            "question_id": question_id,
+            **normalized_llm,
+        }
+
+    def _normalize_single_choice_mapping(
+        self,
+        question: dict | None,
+        mapped: dict | None,
+    ) -> dict | None:
+        if not self._is_single_choice_question(question) or not isinstance(mapped, dict):
+            return None
+        valid_option_ids = {
+            str(option.get("option_id", ""))
+            for option in question.get("options", [])
+            if str(option.get("option_id", ""))
+        }
+        normalized_options = []
+        for option_id in mapped.get("selected_options", []):
+            normalized_option_id = str(option_id)
+            if normalized_option_id and normalized_option_id in valid_option_ids:
+                normalized_options.append(normalized_option_id)
+        deduped_options: list[str] = []
+        for option_id in normalized_options:
+            if option_id not in deduped_options:
+                deduped_options.append(option_id)
+        if len(deduped_options) != 1:
+            return None
+        return {
+            "selected_options": deduped_options,
+            "input_value": str(mapped.get("input_value", "")),
+            "field_updates": dict(mapped.get("field_updates", {})),
+            "missing_fields": list(mapped.get("missing_fields", [])),
+        }
+
+    def _is_single_choice_question(self, question: dict | None) -> bool:
+        if not isinstance(question, dict):
+            return False
+        input_type = str(question.get("input_type", "")).lower()
+        if input_type in {"radio", "single", "select", "time_point"}:
+            return True
+        metadata = question.get("metadata", {})
+        structured_kind = str(metadata.get("structured_kind", "")).lower()
+        return structured_kind in {"radio", "single", "select", "single_choice"}
+
+    def _try_llm_option_mapping(
+        self,
+        graph_state: dict,
+        question: dict,
+        raw_text: str,
+    ) -> dict | None:
+        runtime = graph_state["runtime"]
+        provider = runtime.get("llm_provider")
+        if not runtime.get("llm_available", True) or provider is None:
+            return None
+        payload = {
+            "question": question,
+            "raw_text": raw_text,
+            "matching_hints": list(question.get("metadata", {}).get("matching_hints", [])),
+        }
+        try:
+            prompt_text = self._prompt_loader.render("layer2/text_option_mapping.md", payload)
+            output = invoke_json(
+                provider,
+                prompt_key="layer2/text_option_mapping.md",
+                prompt_text=prompt_text,
+            )
+        except Exception:
+            return None
+        selected_options = output.get("selected_options")
+        if not isinstance(selected_options, list) or not selected_options:
+            return None
+        valid_option_ids = {
+            str(option.get("option_id", ""))
+            for option in question.get("options", [])
+            if str(option.get("option_id", ""))
+        }
+        normalized_options = [
+            str(option_id)
+            for option_id in selected_options
+            if str(option_id) in valid_option_ids
+        ]
+        deduped_options: list[str] = []
+        for option_id in normalized_options:
+            if option_id not in deduped_options:
+                deduped_options.append(option_id)
+        if self._is_single_choice_question(question):
+            if len(deduped_options) != 1:
+                return None
+        elif not deduped_options:
+            return None
+        return {
+            "selected_options": deduped_options,
+            "input_value": "",
+            "field_updates": {},
+            "missing_fields": [],
+        }
+
+    def _log_diagnostic(self, event: str, **fields: object) -> None:
+        payload = {
+            "diagnostic": "content_understand",
+            "event": event,
+            **fields,
+        }
+        _DIAGNOSTIC_LOGGER.warning(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+
+    def _summarize_units(self, content_units: list[dict]) -> list[dict]:
+        summary: list[dict] = []
+        for unit in content_units:
+            summary.append(
+                {
+                    "unit_id": unit.get("unit_id"),
+                    "winner_question_id": unit.get("winner_question_id"),
+                    "needs_attribution": bool(unit.get("needs_attribution", False)),
+                    "selected_options": list(unit.get("selected_options", [])),
+                    "field_updates": dict(unit.get("field_updates", {})),
+                    "missing_fields": list(unit.get("missing_fields", [])),
+                    "input_value": str(unit.get("input_value", "")),
+                }
+            )
+        return summary

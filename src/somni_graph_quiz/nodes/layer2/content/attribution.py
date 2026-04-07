@@ -23,8 +23,18 @@ class FinalAttributionNode:
 
     def run(self, graph_state: dict, content_unit: dict) -> dict:
         candidate_question_ids = list(content_unit["candidate_question_ids"])
-        if content_unit["winner_question_id"] in candidate_question_ids:
+        winner_question_id = content_unit.get("winner_question_id")
+
+        if winner_question_id is not None:
             return {**content_unit, "needs_attribution": False}
+        if not candidate_question_ids:
+            return {**content_unit, "needs_attribution": False}
+        if len(candidate_question_ids) == 1:
+            return {
+                **content_unit,
+                "winner_question_id": candidate_question_ids[0],
+                "needs_attribution": False,
+            }
         llm_output = self._try_llm(graph_state, content_unit)
         if llm_output is not None:
             winner_question_id = llm_output.get("winner_question_id")

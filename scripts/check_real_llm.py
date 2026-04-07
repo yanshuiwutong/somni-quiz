@@ -17,9 +17,16 @@ if str(SRC_ROOT) not in sys.path:
 def main() -> int:
     from somni_graph_quiz.app.real_llm_check import run_real_llm_check
 
+    _configure_stdout(sys.stdout)
     result = run_real_llm_check()
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if bool(result.get("success")) else 1
+
+
+def _configure_stdout(stream: object) -> None:
+    reconfigure = getattr(stream, "reconfigure", None)
+    if callable(reconfigure):
+        reconfigure(encoding="utf-8", errors="replace")
 
 
 if __name__ == "__main__":

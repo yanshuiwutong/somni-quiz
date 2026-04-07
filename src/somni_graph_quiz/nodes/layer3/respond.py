@@ -63,6 +63,7 @@ class ResponseComposerNode:
             "non_content_intent": getattr(finalized, "non_content_intent", "none"),
             "response_language": getattr(finalized, "response_language", "zh-CN"),
             "turn_outcome": getattr(finalized, "turn_outcome", "clarification"),
+            "updated_answer_record": getattr(finalized, "updated_answer_record", {"answers": []}),
             "response_facts": prompt_response_facts,
             "current_question": getattr(finalized, "current_question", None),
             "next_question": getattr(finalized, "next_question", None),
@@ -97,7 +98,10 @@ class ResponseComposerNode:
         if outcome == "answered":
             return f"Recorded. Let's continue with the next question: {next_title}."
         if outcome == "completed":
-            return "All questions are complete. Thank you for sharing."
+            return (
+                "Thank you for sharing. I now have a clearer picture of your sleep habits, "
+                "and next I will organize a more personalized sound, light, and scent sleep plan for you."
+            )
         if outcome == "pullback":
             if response_facts.get("pullback_reason") == "identity_question":
                 return f"I'm Somni, here to stay with you through this sleep questionnaire. Let's come back to {next_title}."
@@ -149,7 +153,10 @@ class ResponseComposerNode:
         if outcome == "answered":
             return f"已记录，我们继续回答下一题：{next_title}。"
         if outcome == "completed":
-            return "问卷已完成，感谢你的回答。"
+            return (
+                "感谢你的分享。我已经大致了解了你的睡眠习惯，"
+                "接下来会结合你记录下来的作息与感受，为你整理更适合你的专属声、光、香睡眠方案。"
+            )
         if outcome == "pullback":
             if response_facts.get("pullback_reason") == "identity_question":
                 return f"我是 Somni，会一直陪你把这份睡眠问卷答完。我们先回到这题：{active_title}。"
