@@ -28,6 +28,8 @@ def _build_archive() -> Path:
         for path in PROJECT_ROOT.rglob("*"):
             if any(part in excluded_dirs for part in path.parts):
                 continue
+            if path.name == ".env":
+                continue
             if path.suffix in excluded_suffixes:
                 continue
             tar.add(path, arcname=path.relative_to(PROJECT_ROOT).as_posix(), recursive=False)
@@ -97,6 +99,16 @@ WantedBy=multi-user.target
 """
 
 
+def _refresh_services(ssh: paramiko.SSHClient) -> None:
+    _run(ssh, "systemctl daemon-reload")
+    _run_allow_failure(ssh, "systemctl disable --now somni-streamlit-51062.service", timeout=120)
+    _run_allow_failure(ssh, "systemctl disable --now somni-api-18000.service", timeout=120)
+    _run(ssh, "systemctl enable somni-graph-quiz-streamlit.service somni-graph-quiz-grpc.service", timeout=120)
+    _run(ssh, "systemctl restart somni-graph-quiz-streamlit.service somni-graph-quiz-grpc.service", timeout=120)
+    _run(ssh, "systemctl status somni-graph-quiz-streamlit.service --no-pager", timeout=120)
+    _run(ssh, "systemctl status somni-graph-quiz-grpc.service --no-pager", timeout=120)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", required=True)
@@ -144,13 +156,7 @@ def main() -> None:
             timeout=1800,
         )
         _run(ssh, f"{args.conda_bin} run -n {args.env_name} python -m pip install -e {args.remote_root}", timeout=1800)
-        _run(ssh, "systemctl daemon-reload")
-        _run_allow_failure(ssh, "systemctl disable --now somni-streamlit-51062.service", timeout=120)
-        _run_allow_failure(ssh, "systemctl disable --now somni-api-18000.service", timeout=120)
-        _run(ssh, "systemctl enable --now somni-graph-quiz-streamlit.service", timeout=120)
-        _run(ssh, "systemctl enable --now somni-graph-quiz-grpc.service", timeout=120)
-        _run(ssh, "systemctl status somni-graph-quiz-streamlit.service --no-pager", timeout=120)
-        _run(ssh, "systemctl status somni-graph-quiz-grpc.service --no-pager", timeout=120)
+        _refresh_services(ssh)
     finally:
         ssh.close()
         archive.unlink(missing_ok=True)
