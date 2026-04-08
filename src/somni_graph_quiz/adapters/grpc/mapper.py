@@ -123,6 +123,31 @@ def build_final_result_message(final_result: dict | None) -> Struct:
     return message
 
 
+def derive_answer_status_code(
+    recent_turn: dict | None,
+    answer_record: dict | None = None,
+) -> str:
+    """Derive the answer recording status for the current turn."""
+    if not isinstance(recent_turn, dict):
+        return "RECORDED" if _has_answer_items(answer_record) else "NOT_RECORDED"
+    if recent_turn.get("partial_question_ids"):
+        return "PARTIAL"
+    if recent_turn.get("modified_question_ids"):
+        return "UPDATED"
+    if recent_turn.get("recorded_question_ids"):
+        return "RECORDED"
+    if _has_answer_items(answer_record):
+        return "RECORDED"
+    return "NOT_RECORDED"
+
+
+def _has_answer_items(answer_record: dict | None) -> bool:
+    if not isinstance(answer_record, dict):
+        return False
+    answers = answer_record.get("answers", [])
+    return isinstance(answers, list) and bool(answers)
+
+
 def _map_question_config(question: somni_quiz_pb2.BusinessQuestion) -> dict | None:
     items = [
         {

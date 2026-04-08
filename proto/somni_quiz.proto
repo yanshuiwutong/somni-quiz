@@ -111,6 +111,7 @@ message ChatQuizResponse {
   AnswerRecord answer_record = 6;
   google.protobuf.Struct final_result = 7;
   string quiz_mode = 8;
+  string answer_status_code = 9;
 }
 
 service QuizService {

@@ -17,11 +17,13 @@
 
 - Prompt 只服务需要 LLM 判断的节点，不为稳定规则硬造 prompt。
 - `TurnClassifyNode` 与 `ContentUnderstand` 都依赖完整短期记忆摘要，而不是只看当前 pending 题。
+- `TurnClassifyNode` 额外依赖增强版题库摘要，避免把明显答题内容误判为闲聊。
 - `ContentUnderstand` 负责：
   - 内容单元切分
   - 单元级 `action_mode`
   - 候选题集合
   - 初步 winner
+  - 题内选项映射与结构化答案闭环
 - `FinalAttribution` 只在候选集合内做纯归属，不再变更 `answer/modify/partial_completion`。
 - `text_option_mapping` 只负责文本到选项的语义映射，不负责题目归属和状态流转。
 - `ResponseComposerNode` 是唯一生成用户可见自然语言的节点。
@@ -70,10 +72,10 @@ prompts/
 | Prompt File | Consumed By | Primary Responsibility | Must Not Do |
 | --- | --- | --- | --- |
 | `layer1/turn_classify.md` | `TurnClassifyNode` | 判定 `main_branch`，规范化输入，识别是否进入 `content` | 不判断具体题目归属，不落库 |
-| `layer2/content_understand.md` | `ContentUnderstand` | 识别内容单元、单元动作、候选题集合、初步 winner、是否需要归属裁决 | 不直接落库，不输出最终文案 |
+| `layer2/content_understand.md` | `ContentUnderstand` | 识别内容单元、单元动作、候选题集合、初步 winner、题内标准化答案、是否需要归属裁决 | 不直接落库，不输出最终文案 |
 | `layer2/final_attribution.md` | `FinalAttribution` | 在候选题集合中选择最终归属题 | 不修改 `action_mode`，不做选项映射 |
 | `layer2/text_option_mapping.md` | `ContentApply` 内 LLM 映射阶段 | 将自由文本映射成题目选项 id 集合 | 不判断题目归属，不推进状态 |
-| `layer3/response_composer.md` | `ResponseComposerNode` | 以 Somni 人设根据 `turn_outcome` 和 `response_facts` 生成最终回复 | 不回写状态，不重算下一题 |
+| `layer3/response_composer.md` | `ResponseComposerNode` | 以 Somni 人设根据 `turn_outcome`、`updated_answer_record` 和 `response_facts` 生成最终回复 | 不回写状态，不重算下一题 |
 
 ## Shared Prompt Assets
 
@@ -195,6 +197,7 @@ TurnClassifyPromptInput = {
         "recent_turn_summaries": list[dict],
         "clarification_context": dict | None,
     },
+    "question_catalog_summary": list[dict],
 }
 ```
 
@@ -207,6 +210,7 @@ TurnClassifyPromptInput = {
 - 用户是否在补上一轮澄清
 - 是否存在已答题修改线索
 - 当前输入是否应进入 `content` 主分支而不是被误判为 `pullback`
+- 当前输入是否明显在回答题库中的其他题，即使它和当前题不匹配
 
 若只给当前 pending 题，无法稳定支持：
 
@@ -241,11 +245,12 @@ ContentUnderstandPromptInput = {
 
 - 先按语义切成 `1..n` 个 `ContentUnit`。
 - 每个 `ContentUnit` 独立判断 `action_mode`。
-- 每个 `ContentUnit` 可有多个候选题。
-- 若一个单元能稳定唯一匹配，直接给 `winner_question_id`。
-- 若多个候选都合理，则：
+- 每个 `ContentUnit` 可有多个候选题，但要逐题检查是否能形成合法答案闭环。
+- 若只有一个候选题能稳定闭环，直接给 `winner_question_id` 与标准化答案字段。
+- 若多个候选都合理且都能闭环，则：
   - `needs_attribution = true`
   - `winner_question_id = null`
+- 若题已识别但题内选项无法唯一映射，也应返回面向该题的澄清信号，而不是硬猜。
 - 若语义不足以支撑任何候选，返回澄清信号而不是硬猜。
 - 一个单元不能被多个问题同时最终消费。
 
@@ -332,9 +337,15 @@ TextOptionMappingPromptInput = {
 
 ```python
 ResponseComposerPromptInput = {
+    "raw_input": str,
+    "input_mode": "message" | "direct_answer",
+    "main_branch": "non_content" | "content",
+    "non_content_intent": str,
     "response_language": str,
     "turn_outcome": str,
+    "updated_answer_record": dict,
     "response_facts": dict,
+    "current_question": dict | None,
     "next_question": dict | None,
     "finalized": bool,
 }
@@ -354,6 +365,8 @@ ResponseComposerPromptInput = {
   - 撤回
   - 查看记录
   - 完成态总结
+- 若 `response_facts` 已提供澄清题目标题和类型，必须围绕该题发问
+- 完成态总结必须只基于 `updated_answer_record` 中的已确认信息
 - 不得暴露内部字段名、节点名、fallback 细节、调试痕迹。
 - 遇到 `pullback` 时，必须执行“极简共情 + 一秒拉回”。
 
@@ -366,6 +379,7 @@ ResponseComposerPromptInput = {
 ```python
 TurnClassifyOutput = {
     "main_branch": "non_content" | "content",
+    "non_content_intent": str,
     "normalized_input": str,
     "reason": str,
 }
@@ -383,10 +397,17 @@ ContentUnderstandOutput = {
         "winner_question_id": str | None,
         "needs_attribution": bool,
         "raw_extracted_value": str | dict,
+        "selected_options": list[str],
+        "input_value": str,
+        "field_updates": dict[str, str],
+        "missing_fields": list[str],
         "confidence": float,
     }],
     "clarification_needed": bool,
     "clarification_reason": str | None,
+    "clarification_question_id": str | None,
+    "clarification_question_title": str | None,
+    "clarification_kind": str | None,
 }
 ```
 
@@ -540,14 +561,17 @@ ResponseComposerOutput = {
 本提示词布局必须直接支撑以下场景：
 
 1. `TurnClassifyNode` 看到完整短期记忆，能把“上一题不是28，是29”引到 `content` 主分支。
-2. `ContentUnderstand` 能把 `我22岁，每天11点睡觉，7点起床` 拆成年龄题与常规作息题两个单元。
-3. 已答题再次被命中时，`ContentUnderstand` 输出 `modify`，不要求显式“修改”字样。
-4. `23点` 命中多个时间题候选时，`FinalAttribution` 在候选集合内裁决或要求澄清。
-5. `23点睡` 不会同时归到自由入睡和自由起床两题。
-6. `十来分钟` 这类表达可由 `text_option_mapping` 映射到正确选项。
-7. `response_composer` 能根据 `language_preference` 切换回复语言。
-8. `response_composer` 在 `pullback` 场景下具备 Somni 风格拉回能力。
-9. LLM 不可用时，关键路径能由规则兜底而不改 gRPC 接口形状。
+2. `TurnClassifyNode` 看到增强题库摘要后，能把看起来像寒暄的题目答案重新路由回 `content`。
+3. `ContentUnderstand` 能把 `我22岁，每天11点睡觉，7点起床` 拆成年龄题与常规作息题两个单元。
+4. 已答题再次被命中时，`ContentUnderstand` 输出 `modify`，不要求显式“修改”字样。
+5. 单选题在唯一候选可闭环时，`ContentUnderstand` 直接输出 `selected_options`。
+6. `23点` 命中多个时间题候选时，`FinalAttribution` 在候选集合内裁决或要求澄清。
+7. `23点睡` 不会同时归到自由入睡和自由起床两题。
+8. `十来分钟` 这类表达可由 `text_option_mapping` 映射到正确选项。
+9. `response_composer` 能根据 `language_preference` 切换回复语言。
+10. `response_composer` 在 `clarification` 场景下会围绕 `clarification_question_title` 发问，而不是泛化追问。
+11. `response_composer` 在 `pullback` 场景下具备 Somni 风格拉回能力。
+12. LLM 不可用时，关键路径能由规则兜底而不改 gRPC 接口形状。
 
 ## Non-Goals
 

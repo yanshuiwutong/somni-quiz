@@ -10,7 +10,7 @@
 
 - 主分支互斥：`non_content | content`
 - `content` 域内支持 `answer + modify + partial_completion` 混合多题命中
-- 意图层只做识别、动作类型判断、候选输出，不直接落库
+- 意图层做识别、动作判断、候选裁剪，并可在题目已闭环时直接输出标准化答案字段，但仍不直接落库
 - 多题冲突先输出候选集合，再由归属节点裁决
 - partial 立即落状态、只补缺失字段、两次无效后跳过但保留 partial
 - 显式跳题与自动跳题并存
@@ -59,11 +59,13 @@ TurnClassifyNode
 #### Output
 
 - `turn.main_branch = non_content | content`
+- `turn.non_content_intent = none | identity | pullback_chat | ...`
 - `turn.normalized_input`
 
 #### Responsibilities
 
 - 判定主分支
+- 判定 `non_content` 子意图
 - 规范化本轮输入
 - 为第二层准备最小上下文
 
@@ -198,6 +200,10 @@ ContentUnit = {
     "winner_question_id": str | None,
     "needs_attribution": bool,
     "raw_extracted_value": str | dict,
+    "selected_options": list[str],
+    "input_value": str,
+    "field_updates": dict[str, str],
+    "missing_fields": list[str],
 }
 ```
 
@@ -207,6 +213,8 @@ ContentUnit = {
 - `action_mode` 判定
 - 候选题集合输出
 - 初步 winner 选择
+- 当某题已经形成合法答案闭环时，直接输出标准化答案字段
+- 澄清时给出尽量具体的目标题信息
 
 #### Must Not
 
@@ -232,6 +240,7 @@ ContentUnit = {
 #### Responsibilities
 
 - 只在候选集合内做最终裁决
+- 仅在多个真实可行候选仍同时成立时运行
 
 #### Must Not
 
@@ -251,7 +260,8 @@ interpret_to_patch
 #### Responsibilities
 
 - 将已归属的 `ContentUnit` 转成标准 patch
-- 调用结构化 parser、规则映射、LLM 映射
+- 优先消费理解层已产出的 `selected_options / input_value / field_updates / missing_fields`
+- 当理解层未完成标准化时，再调用结构化 parser、规则映射、LLM 映射补齐
 - 提交到 `session_memory`
 - 生成统一 `BranchResult`
 
@@ -302,9 +312,16 @@ PatchCandidate = {
 
 按题型固定执行顺序：
 
-1. 结构化解析
-2. 规则映射
-3. LLM 映射
+1. 理解层已闭环结果
+2. 结构化解析
+3. 规则映射
+4. LLM 映射
+
+#### Pre-Resolved Unit Consumption
+
+- 若 `ContentUnit` 已携带合法的 `selected_options`，优先直接消费，不再重复做题内选项猜测。
+- 若 `ContentUnit` 已携带 `field_updates / missing_fields`，优先按结构化答案处理。
+- 只有理解层没有给出可用标准化结果时，`ContentApply` 才继续做题内映射。
 
 #### Structured Parsing
 
@@ -559,6 +576,9 @@ FinalizedTurnContext = {
 - `missing_fields_by_question`
 - `skipped_question_ids`
 - `clarification_reason`
+- `clarification_question_id`
+- `clarification_question_title`
+- `clarification_kind`
 - `next_question_id`
 - `finalized`
 - `response_language`
@@ -584,6 +604,8 @@ FinalizedTurnContext = {
   - partial 已记录并继续追问
   - 澄清请求
   - 完成态总结
+- `clarification` 时只围绕 `response_facts` 指向的目标问题追问
+- `completed` 时基于 `updated_answer_record` 做结束态总结
 
 ### Must Not
 
@@ -663,6 +685,8 @@ TurnClassifyNode -> ContentBranch
 9. “改上一题”
 10. 含控制词和答题内容的混合输入，只执行一个主分支
 11. 所有题 answered 后进入 `completed`
+12. 单选题在理解层即可完成唯一题内闭环
+13. 澄清只围绕已识别出的目标问题，不回退成泛化追问
 
 ## Non-Goals
 

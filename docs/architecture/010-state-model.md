@@ -24,6 +24,7 @@
 - 节点不得直接原地修改状态，只能输出 `state_patch` 交由 runtime 合并。
 - 第二层分支只输出结构化结果，不直接输出最终用户文案。
 - 主分支保持互斥：`non_content | content`。
+- `content` 单元在进入 `ContentApply` 前，允许已经携带标准化答案字段。
 
 ## GraphState Top Level
 
@@ -228,6 +229,7 @@ TurnContext = {
     "input_mode": "message" | "direct_answer",
     "normalized_input": str,
     "main_branch": "non_content" | "content" | None,
+    "non_content_intent": str,
     "response_language": str,
     "content_units": list[ContentUnit],
     "branch_results": dict[str, dict],
@@ -245,6 +247,10 @@ ContentUnit = {
     "winner_question_id": str | None,
     "needs_attribution": bool,
     "raw_extracted_value": str | dict,
+    "selected_options": list[str],
+    "input_value": str,
+    "field_updates": dict[str, str],
+    "missing_fields": list[str],
 }
 ```
 
@@ -255,7 +261,9 @@ ContentUnit = {
 - `main_branch` 只允许：
   - `non_content`
   - `content`
+- `non_content_intent` 记录第一层分类后的控制或 pullback 子意图，默认值为 `none`。
 - 不支持同轮 `non_content + content` 跨主分支并行执行。
+- `selected_options / input_value / field_updates / missing_fields` 允许由理解层直接产出，供 `ContentApply` 优先消费。
 
 ## ArtifactsState
 
@@ -419,10 +427,10 @@ TurnResult = {
   - 主分支
   - 内容单元的 `action_mode`
   - 候选题集合
-- 意图层不做最终落库。
+- 意图层不做最终落库，但允许在题目已闭环时直接输出标准化答案字段。
 - 若一个内容单元命中多题：
-  - 先输出候选集合
-  - 再交给归属节点做最终裁决
+  - 先评估哪些候选题能形成合法答案闭环
+  - 只有多个候选都成立时才保留候选集合并进入归属裁决
 - 无额外信息时：
   - 普通作息题优先于自由放松作息题
 
@@ -526,6 +534,7 @@ TurnResult = {
     "input_mode": "message",
     "normalized_input": "7点起",
     "main_branch": "content",
+    "non_content_intent": "none",
     "response_language": "zh-CN",
     "content_units": [],
     "branch_results": {}
@@ -568,7 +577,14 @@ TurnResult = {
           "candidate_question_ids": ["question-02"],
           "winner_question_id": "question-02",
           "needs_attribution": false,
-          "raw_extracted_value": "23:00-07:00"
+          "raw_extracted_value": "23:00-07:00",
+          "selected_options": [],
+          "input_value": "",
+          "field_updates": {
+            "bedtime": "23:00",
+            "wake_time": "07:00"
+          },
+          "missing_fields": []
         },
         {
           "unit_id": "unit-2",
@@ -577,7 +593,11 @@ TurnResult = {
           "candidate_question_ids": ["question-01"],
           "winner_question_id": "question-01",
           "needs_attribution": false,
-          "raw_extracted_value": "29"
+          "raw_extracted_value": "29",
+          "selected_options": ["B"],
+          "input_value": "",
+          "field_updates": {},
+          "missing_fields": []
         }
       ]
     }

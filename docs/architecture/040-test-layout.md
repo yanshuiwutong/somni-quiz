@@ -11,7 +11,7 @@
 - 主分支互斥：`non_content | content`
 - `content` 域内支持 `answer + modify + partial_completion` 混合命中
 - 已答题再次命中视为修改
-- 单片段时间表达、多题候选冲突、partial 补全与跳过等复杂场景可持续回归
+- 单片段时间表达、多题候选冲突、单选闭环、partial 补全与跳过等复杂场景可持续回归
 - LLM 主判定链路与无网规则兜底都可单独验证
 
 ## Core Principles
@@ -109,6 +109,7 @@ tests/
 
 - `TurnClassifyNode` 识别 `non_content | content`
 - `TurnClassifyNode` 读取完整 `llm_memory_view`
+- `TurnClassifyNode` 读取增强题库摘要并纠正误判为 `pullback_chat` 的题目答案
 - 控制语句、闲聊、内容输入的主分支判定
 - LLM 不可用时的规则兜底
 
@@ -119,11 +120,13 @@ tests/
 - `ContentUnderstand` 的内容单元切分
 - `action_mode = answer | modify | partial_completion`
 - 候选题集合输出
+- 唯一可闭环候选下的单选直接归属与标准化输出
 - `needs_attribution` 标记
 - `FinalAttribution` 只在候选集合内选择 winner
 - `text_option_mapping` 的口语选项映射
 - `NonContentBranch` 的控制动作和 pullback 结果
 - `ContentApply` 的 patch 解释与提交规则
+- 题已识别但题内选项未识别时的目标题澄清字段
 
 ### Layer 3 Node Tests
 
@@ -134,6 +137,7 @@ tests/
 - partial follow-up / partial skip
 - completed 判定
 - `ResponseComposerNode` 的多语言输出
+- `ResponseComposerNode` 的定向澄清与完成态总结
 - 唯一响应节点原则
 
 ### Node Test Rules
@@ -159,12 +163,14 @@ tests/
 - 已答题再次命中转修改
 - `content` 域内多单元并行命中
 - 普通作息与自由放松作息候选冲突
+- 单选题在理解层完成唯一题内闭环
 - 单片段时间进入 partial
 - partial 补全成功
 - partial 两次无效后跳过但保留 partial
 - partial 被跳过后，后续补缺失字段可自动恢复
 - 显式跳题与自动跳题
 - `clarification_context` 下轮补充
+- 澄清时携带 `clarification_question_title / clarification_kind`
 - `language_preference` 影响响应语言
 
 ### What To Assert
@@ -287,6 +293,8 @@ RegressionCase = {
 10. 显式 `下一题`、`跳过`、`撤回`、`查看全部`。
 11. `改上一题` 这类依赖短期记忆的控制语句。
 12. `language_preference` 切换下的最终响应语言。
+13. 题目已识别但选项未识别时，应对准该题发起澄清，而不是泛化追问。
+14. 完成态回复只基于已确认答案做总结。
 
 ## LLM Test Strategy
 
@@ -306,6 +314,7 @@ RegressionCase = {
   - 超时处理
   - 不可解析输出处理
   - fallback_used 标识
+- 覆盖 `scripts/check_real_llm.py` 这类显式诊断脚本的配置与结果汇总逻辑
 - 不把真实在线模型调用纳入默认测试流水线。
 
 ## Domain and Runtime Utility Tests

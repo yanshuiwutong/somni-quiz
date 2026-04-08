@@ -46,3 +46,27 @@ def test_serve_grpc_binds_configured_address(monkeypatch) -> None:
 
     assert server is fake_server
     assert events == [("bind", "127.0.0.1:19001"), ("start", None)]
+
+
+def test_serve_grpc_raises_when_bind_fails(monkeypatch) -> None:
+    class _FakeServer:
+        def add_insecure_port(self, address: str) -> int:
+            assert address == "127.0.0.1:19001"
+            return 0
+
+        def start(self) -> None:
+            raise AssertionError("start should not be called when bind fails")
+
+    settings = GraphQuizSettings(grpc_host="127.0.0.1", grpc_port=19001)
+
+    monkeypatch.setattr(
+        "somni_graph_quiz.adapters.grpc.server.create_grpc_server",
+        lambda incoming_settings=None: _FakeServer(),
+    )
+
+    try:
+        serve_grpc(settings)
+    except RuntimeError as exc:
+        assert "127.0.0.1:19001" in str(exc)
+    else:
+        raise AssertionError("Expected serve_grpc to raise when add_insecure_port returns 0")

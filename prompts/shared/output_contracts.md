@@ -17,6 +17,7 @@
 ```json
 {
   "main_branch": "non_content",
+  "non_content_intent": "navigate_next",
   "normalized_input": "下一题",
   "reason": "explicit control expression"
 }
@@ -26,6 +27,8 @@
 
 - `main_branch`
   - `"non_content"` | `"content"`
+- `non_content_intent`
+  - 控制或 pullback 子意图；若主分支为 `content` 通常为 `"none"`
 - `normalized_input`
   - 输入归一化结果
 - `reason`
@@ -44,11 +47,18 @@
       "winner_question_id": "question-01",
       "needs_attribution": false,
       "raw_extracted_value": "22",
+      "selected_options": ["A"],
+      "input_value": "",
+      "field_updates": {},
+      "missing_fields": [],
       "confidence": 0.98
     }
   ],
   "clarification_needed": false,
-  "clarification_reason": null
+  "clarification_reason": null,
+  "clarification_question_id": null,
+  "clarification_question_title": null,
+  "clarification_kind": null
 }
 ```
 
@@ -56,10 +66,19 @@
 
 - `content_units`
   - 内容单元数组，可为空
+  - 单元可直接携带标准化答案字段
+  - 单选题若已闭环，`selected_options` 必须是唯一选项 id
+  - 结构化题可通过 `field_updates / missing_fields` 表示完整或部分闭环结果
 - `clarification_needed`
   - 当整条输入无法稳定继续时为 `true`
 - `clarification_reason`
   - 澄清原因，若无需澄清则为 `null`
+- `clarification_question_id`
+  - 若已识别出需要澄清的目标问题，则返回对应题 id
+- `clarification_question_title`
+  - 面向响应层的题目标题，若无法确定则为 `null`
+- `clarification_kind`
+  - 澄清类别，例如题目未识别、题已识别但选项未识别、partial 缺字段等
 
 ## `NonContentDetectOutput`
 

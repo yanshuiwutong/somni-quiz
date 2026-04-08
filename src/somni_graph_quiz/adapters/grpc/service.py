@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import grpc
+
 from somni_quiz_ai.grpc.generated import somni_quiz_pb2
 
 from somni_graph_quiz.adapters.grpc.mapper import (
     build_answer_record_message,
     build_final_result_message,
     build_pending_question_message,
+    derive_answer_status_code,
     map_chat_request_to_turn_input,
     map_questionnaire_to_catalog,
 )
@@ -71,13 +74,29 @@ class GrpcQuizService:
         request: somni_quiz_pb2.ChatQuizRequest,
         context: object | None = None,
     ) -> somni_quiz_pb2.ChatQuizResponse:
-        snapshot = self._sessions[request.session_id]
+        snapshot = self._sessions.get(request.session_id)
+        if snapshot is None:
+            details = "Session not initialized. Call InitQuiz first."
+            if context is not None:
+                context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+                context.set_details(details)
+            return somni_quiz_pb2.ChatQuizResponse(
+                success=False,
+                session_id=request.session_id,
+                assistant_message=details,
+                answer_status_code="NOT_RECORDED",
+            )
         turn_input = map_chat_request_to_turn_input(
             request,
             language_preference=snapshot.language,
         )
         result = self._engine.run_turn(snapshot.graph_state, turn_input)
         snapshot.graph_state = result["updated_graph_state"]
+        recent_turns = snapshot.graph_state["session_memory"].get("recent_turns", [])
+        answer_status_code = derive_answer_status_code(
+            recent_turns[-1] if recent_turns else None,
+            result.get("answer_record"),
+        )
         return somni_quiz_pb2.ChatQuizResponse(
             success=True,
             session_id=request.session_id,
@@ -87,4 +106,5 @@ class GrpcQuizService:
             answer_record=build_answer_record_message(result["answer_record"]),
             final_result=build_final_result_message(result["final_result"]),
             quiz_mode=snapshot.quiz_mode,
+            answer_status_code=answer_status_code,
         )

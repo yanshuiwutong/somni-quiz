@@ -43,6 +43,9 @@ def serve_grpc(settings: GraphQuizSettings | None = None) -> grpc.Server:
     """Bind and start the standalone gRPC server."""
     runtime_settings = settings or get_settings()
     server = create_grpc_server(runtime_settings)
-    server.add_insecure_port(f"{runtime_settings.grpc_host}:{runtime_settings.grpc_port}")
+    bind_address = f"{runtime_settings.grpc_host}:{runtime_settings.grpc_port}"
+    bound_port = server.add_insecure_port(bind_address)
+    if bound_port == 0:
+        raise RuntimeError(f"Failed to bind gRPC server to {bind_address}")
     server.start()
     return server

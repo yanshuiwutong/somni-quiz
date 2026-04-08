@@ -4,6 +4,7 @@ from somni_quiz_ai.grpc.generated import somni_quiz_pb2
 
 from somni_graph_quiz.adapters.grpc.mapper import (
     build_pending_question_message,
+    derive_answer_status_code,
     map_chat_request_to_turn_input,
     map_questionnaire_to_catalog,
 )
@@ -98,3 +99,68 @@ def test_build_pending_question_message_preserves_config() -> None:
     assert pending.config.items[0].format == "HH:mm"
     assert pending.config.items[1].index == 1
     assert pending.config.items[1].label == "起床时间："
+
+
+def test_derive_answer_status_code_returns_recorded_for_applied_answers() -> None:
+    status_code = derive_answer_status_code(
+        {
+            "recorded_question_ids": ["question-01"],
+            "modified_question_ids": [],
+            "partial_question_ids": [],
+        }
+    )
+
+    assert status_code == "RECORDED"
+
+
+def test_derive_answer_status_code_returns_partial_when_answer_is_incomplete() -> None:
+    status_code = derive_answer_status_code(
+        {
+            "recorded_question_ids": [],
+            "modified_question_ids": [],
+            "partial_question_ids": ["question-02"],
+        }
+    )
+
+    assert status_code == "PARTIAL"
+
+
+def test_derive_answer_status_code_returns_updated_for_modified_answers() -> None:
+    status_code = derive_answer_status_code(
+        {
+            "recorded_question_ids": [],
+            "modified_question_ids": ["question-01"],
+            "partial_question_ids": [],
+        }
+    )
+
+    assert status_code == "UPDATED"
+
+
+def test_derive_answer_status_code_returns_not_recorded_without_answer_changes() -> None:
+    status_code = derive_answer_status_code(
+        {
+            "recorded_question_ids": [],
+            "modified_question_ids": [],
+            "partial_question_ids": [],
+        }
+    )
+
+    assert status_code == "NOT_RECORDED"
+
+
+def test_derive_answer_status_code_falls_back_to_answer_record_when_turn_metadata_is_missing() -> None:
+    status_code = derive_answer_status_code(
+        {},
+        {
+            "answers": [
+                {
+                    "question_id": "question-01",
+                    "selected_options": ["A"],
+                    "input_value": "",
+                }
+            ]
+        },
+    )
+
+    assert status_code == "RECORDED"
