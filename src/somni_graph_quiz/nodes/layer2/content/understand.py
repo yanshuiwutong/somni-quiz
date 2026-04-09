@@ -24,6 +24,7 @@ _TIME_EXPRESSION_PATTERN = re.compile(
     r"(?:\s*[:：]\s*\d{1,2})?\s*(?:点|时)(?=$|[\s,，。；;：:、!?？]|左右|前后|半|整|睡|起|醒|上床|下床)"
 )
 _RELAXED_CONTEXT_TOKENS = ("自由", "自然", "周末", "休息日", "完全自由安排")
+_WAKE_AFTER_TIME_PATTERN = re.compile(r"(?:点|时)\s*起")
 
 
 class ContentUnderstandNode:
@@ -98,6 +99,7 @@ class ContentUnderstandNode:
         """Normalize a resolved content unit into a storage-ready payload."""
         normalized = self._normalize_unit(content_unit, 1)
         normalized = self._prefer_regular_schedule_question(graph_state, normalized)
+        normalized = self._ensure_regular_schedule_question(graph_state, normalized)
         normalized = self._resolve_single_choice_winner(graph_state, normalized)
         question_id = normalized.get("winner_question_id")
         if not question_id:
@@ -105,13 +107,16 @@ class ContentUnderstandNode:
         question = graph_state["question_catalog"]["question_index"].get(question_id)
         if not question:
             return normalized
+        normalized = self._normalize_action_mode_for_state(graph_state, normalized)
         if normalized["selected_options"] or normalized["field_updates"] or normalized["missing_fields"]:
             return normalized
-        mapped = map_content_answer(
-            question,
-            normalized.get("raw_extracted_value", normalized.get("unit_text", "")),
-            raw_text=normalized.get("unit_text", ""),
-        )
+        mapped = self._map_regular_schedule_unit(normalized)
+        if mapped is None:
+            mapped = map_content_answer(
+                question,
+                normalized.get("raw_extracted_value", normalized.get("unit_text", "")),
+                raw_text=normalized.get("unit_text", ""),
+            )
         if (
             not mapped.get("selected_options")
             and not mapped.get("field_updates")
@@ -146,14 +151,135 @@ class ContentUnderstandNode:
             "missing_fields": missing_fields,
         }
 
+    def _normalize_action_mode_for_state(self, graph_state: dict, unit: dict) -> dict:
+        question_id = str(unit.get("winner_question_id") or "")
+        if not question_id:
+            return unit
+        session_memory = graph_state["session_memory"]
+        normalized_action_mode = self._action_mode(session_memory, question_id)
+        if question_id == "question-02":
+            field_updates = dict(unit.get("field_updates", {}))
+            if not field_updates:
+                field_updates = self._extract_regular_schedule_fields(unit)
+            if self._should_resume_partial_schedule(session_memory, question_id, field_updates):
+                normalized_action_mode = "partial_completion"
+        if str(unit.get("action_mode") or "") == normalized_action_mode:
+            return unit
+        return {
+            **unit,
+            "action_mode": normalized_action_mode,
+        }
+
+    def _map_regular_schedule_unit(self, unit: dict) -> dict | None:
+        if str(unit.get("winner_question_id") or "") != "question-02":
+            return None
+        field_updates = self._extract_regular_schedule_fields(unit)
+        if not field_updates:
+            return None
+        input_value = str(unit.get("input_value", ""))
+        if not input_value and {"bedtime", "wake_time"}.issubset(field_updates):
+            input_value = f"{field_updates['bedtime']}-{field_updates['wake_time']}"
+        return {
+            "selected_options": [],
+            "input_value": input_value,
+            "field_updates": field_updates,
+            "missing_fields": [field for field in ("bedtime", "wake_time") if field not in field_updates],
+        }
+
+    def _extract_regular_schedule_fields(self, unit: dict) -> dict[str, str]:
+        raw_extracted_value = unit.get("raw_extracted_value")
+        if isinstance(raw_extracted_value, dict):
+            direct_fields = {
+                field: str(value)
+                for field in ("bedtime", "wake_time")
+                if (value := raw_extracted_value.get(field))
+            }
+            if direct_fields:
+                return direct_fields
+
+        for candidate_text in self._regular_schedule_parse_candidates(unit):
+            filled_fields = parse_schedule_fragment(candidate_text).get("filled_fields", {})
+            if filled_fields:
+                return {
+                    field: str(value)
+                    for field, value in filled_fields.items()
+                    if field in {"bedtime", "wake_time"} and value
+                }
+        return {}
+
+    def _regular_schedule_parse_candidates(self, unit: dict) -> list[str]:
+        candidates: list[str] = []
+        for value in (
+            unit.get("unit_text", ""),
+            unit.get("raw_extracted_value", ""),
+            unit.get("input_value", ""),
+        ):
+            if isinstance(value, str):
+                normalized_value = value.strip()
+                if normalized_value and normalized_value not in candidates:
+                    candidates.append(normalized_value)
+        return candidates
+
     def _prefer_regular_schedule_question(self, graph_state: dict, unit: dict) -> dict:
         regular_schedule_question_id = "question-02"
+        time_question_ids = {regular_schedule_question_id, "question-03", "question-04"}
         question_index = graph_state["question_catalog"]["question_index"]
         if regular_schedule_question_id not in question_index:
+            return unit
+        time_question_priority_target = self._time_question_priority_target(
+            graph_state["session_memory"],
+            str(unit.get("unit_text", "")),
+        )
+        candidate_question_ids = {str(question_id) for question_id in unit.get("candidate_question_ids", [])}
+        winner_question_id = str(unit.get("winner_question_id") or "")
+        if time_question_priority_target and (
+            winner_question_id == time_question_priority_target
+            or time_question_priority_target in candidate_question_ids
+        ):
+            return unit
+        if winner_question_id and winner_question_id not in time_question_ids:
+            return unit
+        if candidate_question_ids and not (candidate_question_ids & time_question_ids):
             return unit
         if self._has_relaxed_context(str(unit.get("unit_text", ""))):
             return unit
         if not self._looks_like_regular_schedule_unit(unit):
+            return unit
+        return {
+            **unit,
+            "candidate_question_ids": [regular_schedule_question_id],
+            "winner_question_id": regular_schedule_question_id,
+            "needs_attribution": False,
+        }
+
+    def _ensure_regular_schedule_question(self, graph_state: dict, unit: dict) -> dict:
+        regular_schedule_question_id = "question-02"
+        question_index = graph_state["question_catalog"]["question_index"]
+        if regular_schedule_question_id not in question_index:
+            return unit
+        unit_text = str(unit.get("unit_text", ""))
+        if self._has_relaxed_context(unit_text):
+            return unit
+        candidate_question_ids = {
+            str(question_id)
+            for question_id in unit.get("candidate_question_ids", [])
+            if question_id
+        }
+        winner_question_id = str(unit.get("winner_question_id") or "")
+        time_question_ids = {"question-03", "question-04"}
+        if not (candidate_question_ids & time_question_ids or winner_question_id in time_question_ids):
+            return unit
+        session_memory = graph_state["session_memory"]
+        if self._time_question_priority_target(session_memory, unit_text):
+            return unit
+        schedule = parse_schedule_fragment(unit_text)
+        filled_fields = schedule.get("filled_fields", {})
+        if not filled_fields:
+            return unit
+        if not ({"bedtime", "wake_time"} & set(filled_fields)):
+            return unit
+        winner_question_id = str(unit.get("winner_question_id") or "")
+        if winner_question_id == regular_schedule_question_id:
             return unit
         return {
             **unit,
@@ -324,6 +450,34 @@ class ContentUnderstandNode:
 
         schedule = parse_schedule_fragment(raw_input)
         if schedule["is_time_point_only"]:
+            if (
+                "question-02" in session_memory["question_states"]
+                and not self._has_relaxed_context(raw_input)
+                and not self._time_question_priority_target(session_memory, raw_input)
+            ):
+                question_id = "question-02"
+                action_mode = self._action_mode(session_memory, question_id)
+                if self._should_resume_partial_schedule(
+                    session_memory,
+                    question_id,
+                    schedule["filled_fields"],
+                ):
+                    action_mode = "partial_completion"
+                return {
+                    "content_units": [
+                        {
+                            "unit_id": "unit-1",
+                            "unit_text": raw_input,
+                            "action_mode": action_mode,
+                            "candidate_question_ids": [question_id],
+                            "winner_question_id": question_id,
+                            "needs_attribution": False,
+                            "raw_extracted_value": schedule["filled_fields"] or raw_input,
+                        }
+                    ],
+                    "clarification_needed": False,
+                    "clarification_reason": None,
+                }
             candidate_question_ids = self._time_candidates(graph_state)
             return {
                 "content_units": [
@@ -491,6 +645,8 @@ class ContentUnderstandNode:
             return None
         if self._has_relaxed_context(raw_input):
             return None
+        if self._time_question_priority_target(session_memory, raw_input):
+            return None
         question_id = "question-02"
         if self._should_resume_partial_schedule(session_memory, question_id, schedule["filled_fields"]):
             action_mode = "partial_completion"
@@ -533,6 +689,29 @@ class ContentUnderstandNode:
             return False
         field_names = set(filled_fields)
         return field_names.issubset(missing_fields)
+
+    def _time_question_priority_target(self, session_memory: dict, raw_input: str) -> str | None:
+        current_question_id = str(session_memory.get("current_question_id") or "")
+        if self._can_answer_time_question(current_question_id, raw_input):
+            return current_question_id
+
+        pending_modify_context = session_memory.get("pending_modify_context") or {}
+        modify_target = str(pending_modify_context.get("question_id") or "")
+        if self._can_answer_time_question(modify_target, raw_input):
+            return modify_target
+        return None
+
+    def _can_answer_time_question(self, question_id: str, raw_input: str) -> bool:
+        if question_id not in {"question-03", "question-04"}:
+            return False
+        if not self._contains_time_expression(raw_input):
+            return False
+
+        looks_like_wake = self._looks_like_wake_text(raw_input)
+        looks_like_sleep = self._looks_like_sleep_text(raw_input)
+        if question_id == "question-03":
+            return not (looks_like_wake and not looks_like_sleep)
+        return not (looks_like_sleep and not looks_like_wake)
 
     def _time_candidates(self, graph_state: dict) -> list[str]:
         question_order = graph_state["question_catalog"]["question_order"]
@@ -699,6 +878,18 @@ class ContentUnderstandNode:
                 "missing_fields": list(closure.get("missing_fields", [])),
             }
         if len(closures) > 1:
+            preferred_closure = self._prefer_relaxed_time_closure(graph_state, unit, closures)
+            if preferred_closure is not None:
+                return {
+                    **unit,
+                    "candidate_question_ids": [preferred_closure["question_id"]],
+                    "winner_question_id": preferred_closure["question_id"],
+                    "needs_attribution": False,
+                    "selected_options": list(preferred_closure["selected_options"]),
+                    "input_value": str(preferred_closure.get("input_value", "")),
+                    "field_updates": dict(preferred_closure.get("field_updates", {})),
+                    "missing_fields": list(preferred_closure.get("missing_fields", [])),
+                }
             return {
                 **unit,
                 "candidate_question_ids": [closure["question_id"] for closure in closures],
@@ -744,6 +935,38 @@ class ContentUnderstandNode:
             "field_updates": dict(unit.get("field_updates", {})),
             "missing_fields": list(unit.get("missing_fields", [])),
         }
+
+    def _prefer_relaxed_time_closure(
+        self,
+        graph_state: dict,
+        unit: dict,
+        closures: list[dict],
+    ) -> dict | None:
+        closure_by_question_id = {
+            str(closure.get("question_id")): closure
+            for closure in closures
+            if str(closure.get("question_id"))
+        }
+        closure_question_ids = set(closure_by_question_id)
+        if not closure_question_ids or not closure_question_ids.issubset({"question-03", "question-04"}):
+            return None
+
+        unit_text = str(unit.get("unit_text", ""))
+        if self._looks_like_wake_text(unit_text):
+            return closure_by_question_id.get("question-04")
+        if self._looks_like_sleep_text(unit_text):
+            return closure_by_question_id.get("question-03")
+
+        session_memory = graph_state["session_memory"]
+        modify_target = str((session_memory.get("pending_modify_context") or {}).get("question_id") or "")
+        if modify_target in closure_by_question_id:
+            return closure_by_question_id[modify_target]
+
+        current_question_id = str(session_memory.get("current_question_id") or "")
+        if current_question_id in closure_by_question_id:
+            return closure_by_question_id[current_question_id]
+
+        return None
 
     def _resolve_single_choice_candidate_closures(
         self,
@@ -852,6 +1075,14 @@ class ContentUnderstandNode:
         structured_kind = str(metadata.get("structured_kind", "")).lower()
         return structured_kind in {"radio", "single", "select", "single_choice"}
 
+    def _looks_like_wake_text(self, unit_text: str) -> bool:
+        if any(token in unit_text for token in ("起床", "醒", "早上", "早晨")):
+            return True
+        return bool(_WAKE_AFTER_TIME_PATTERN.search(unit_text))
+
+    def _looks_like_sleep_text(self, unit_text: str) -> bool:
+        return any(token in unit_text for token in ("睡", "入睡", "晚上", "夜里"))
+
     def _try_llm_option_mapping(
         self,
         graph_state: dict,
@@ -920,6 +1151,7 @@ class ContentUnderstandNode:
                 {
                     "unit_id": unit.get("unit_id"),
                     "winner_question_id": unit.get("winner_question_id"),
+                    "action_mode": unit.get("action_mode"),
                     "needs_attribution": bool(unit.get("needs_attribution", False)),
                     "selected_options": list(unit.get("selected_options", [])),
                     "field_updates": dict(unit.get("field_updates", {})),

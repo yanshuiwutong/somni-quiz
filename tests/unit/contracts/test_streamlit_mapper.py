@@ -26,12 +26,14 @@ def test_build_streamlit_view_contains_chat_and_pending_question() -> None:
         pending_question={"question_id": "question-01", "title": "Q1"},
         finalized=False,
         final_result=None,
+        progress_percent=25.0,
         quiz_mode="dynamic",
         chat_history=[{"role": "assistant", "content": "Hello"}],
     )
 
     assert view["pending_question"]["question_id"] == "question-01"
     assert view["chat_history"][0]["content"] == "Hello"
+    assert view["progress_percent"] == 25.0
 
 
 def test_map_streamlit_questionnaire_to_catalog_preserves_config() -> None:

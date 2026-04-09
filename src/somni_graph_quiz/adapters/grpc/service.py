@@ -18,6 +18,8 @@ from somni_graph_quiz.adapters.grpc.mapper import (
 )
 from somni_graph_quiz.app.bootstrap import apply_runtime_dependencies
 from somni_graph_quiz.contracts.graph_state import create_graph_state
+from somni_graph_quiz.contracts.question_catalog import get_question
+from somni_graph_quiz.contracts.turn_result import calculate_progress_percent
 from somni_graph_quiz.runtime.engine import GraphRuntimeEngine
 
 
@@ -42,6 +44,11 @@ class GrpcQuizService:
         request: somni_quiz_pb2.InitQuizRequest,
         context: object | None = None,
     ) -> somni_quiz_pb2.InitQuizResponse:
+        snapshot = self._sessions.get(request.session_id)
+        if snapshot is not None:
+            apply_runtime_dependencies(snapshot.graph_state)
+            return self._build_init_response(snapshot)
+
         question_catalog = map_questionnaire_to_catalog(list(request.questionnaire))
         graph_state = create_graph_state(
             session_id=request.session_id,
@@ -49,6 +56,7 @@ class GrpcQuizService:
             quiz_mode=request.quiz_mode or "dynamic",
             question_catalog=question_catalog,
             language_preference=request.language or "zh-CN",
+            default_city=request.default_city,
         )
         apply_runtime_dependencies(graph_state)
         self._sessions[request.session_id] = SessionSnapshot(
@@ -56,18 +64,7 @@ class GrpcQuizService:
             quiz_mode=request.quiz_mode or "dynamic",
             language=request.language or "zh-CN",
         )
-        pending_question = build_pending_question_message(
-            question_catalog["question_index"].get(graph_state["session_memory"]["current_question_id"])
-        )
-        return somni_quiz_pb2.InitQuizResponse(
-            success=True,
-            session_id=request.session_id,
-            initialized=True,
-            assistant_message=pending_question.title,
-            pending_question=pending_question,
-            answer_record=somni_quiz_pb2.AnswerRecord(answer_id="", answers=[]),
-            quiz_mode=request.quiz_mode or "dynamic",
-        )
+        return self._build_init_response(self._sessions[request.session_id])
 
     def ChatQuiz(  # noqa: N802
         self,
@@ -93,10 +90,7 @@ class GrpcQuizService:
         result = self._engine.run_turn(snapshot.graph_state, turn_input)
         snapshot.graph_state = result["updated_graph_state"]
         recent_turns = snapshot.graph_state["session_memory"].get("recent_turns", [])
-        answer_status_code = derive_answer_status_code(
-            recent_turns[-1] if recent_turns else None,
-            result.get("answer_record"),
-        )
+        answer_status_code = derive_answer_status_code(recent_turns[-1] if recent_turns else None)
         return somni_quiz_pb2.ChatQuizResponse(
             success=True,
             session_id=request.session_id,
@@ -105,6 +99,37 @@ class GrpcQuizService:
             finalized=result["finalized"],
             answer_record=build_answer_record_message(result["answer_record"]),
             final_result=build_final_result_message(result["final_result"]),
+            progress_percent=float(result.get("progress_percent", 0.0)),
             quiz_mode=snapshot.quiz_mode,
             answer_status_code=answer_status_code,
         )
+
+    def _build_init_response(self, snapshot: SessionSnapshot) -> somni_quiz_pb2.InitQuizResponse:
+        graph_state = snapshot.graph_state
+        session_memory = graph_state["session_memory"]
+        question_catalog = graph_state["question_catalog"]
+        pending_question_data = get_question(question_catalog, session_memory.get("current_question_id"))
+        pending_question = build_pending_question_message(pending_question_data)
+        assistant_message = pending_question.title or self._default_init_message(snapshot)
+        return somni_quiz_pb2.InitQuizResponse(
+            success=True,
+            session_id=graph_state["session"]["session_id"],
+            initialized=True,
+            assistant_message=assistant_message,
+            pending_question=pending_question,
+            answer_record=build_answer_record_message(
+                {"answers": list(session_memory.get("answered_records", {}).values())}
+            ),
+            progress_percent=calculate_progress_percent(
+                answered_question_ids=session_memory.get("answered_question_ids", []),
+                partial_question_ids=session_memory.get("partial_question_ids", []),
+                question_count=len(question_catalog.get("question_order", [])),
+                finalized=bool(graph_state["runtime"].get("finalized", False)),
+            ),
+            quiz_mode=snapshot.quiz_mode,
+        )
+
+    def _default_init_message(self, snapshot: SessionSnapshot) -> str:
+        if snapshot.language.startswith("en"):
+            return "Quiz already completed."
+        return "问卷已完成。"

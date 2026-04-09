@@ -234,6 +234,30 @@ def test_turn_classify_marks_greeting_as_pullback_chat(question_catalog: dict) -
     assert result["state_patch"]["turn"]["non_content_intent"] == "pullback_chat"
 
 
+def test_turn_classify_marks_weather_query_as_non_content(question_catalog: dict) -> None:
+    graph_state = create_graph_state(
+        session_id="session-weather",
+        channel="grpc",
+        quiz_mode="dynamic",
+        question_catalog=question_catalog,
+        language_preference="zh-CN",
+    )
+
+    result = TurnClassifyNode().run(
+        graph_state,
+        TurnInput(
+            session_id="session-weather",
+            channel="grpc",
+            input_mode="message",
+            raw_input="上海今天天气怎么样",
+            language_preference="zh-CN",
+        ),
+    )
+
+    assert result["state_patch"]["turn"]["main_branch"] == "non_content"
+    assert result["state_patch"]["turn"]["non_content_intent"] == "weather_query"
+
+
 def test_turn_classify_llm_payload_includes_future_question_option_summary() -> None:
     question_catalog = {
         "question_order": ["question-01", "question-05", "question-06"],
@@ -352,6 +376,118 @@ def test_turn_classify_overrides_pullback_for_catalog_answer_like_text() -> None
             channel="grpc",
             input_mode="message",
             raw_input="压力很大睡不着",
+            language_preference="zh-CN",
+        ),
+    )
+
+    assert result["state_patch"]["turn"]["main_branch"] == "content"
+    assert result["state_patch"]["turn"]["non_content_intent"] == "none"
+
+
+def test_turn_classify_overrides_pullback_for_current_question_answerable_text() -> None:
+    question_catalog = {
+        "question_order": ["question-06"],
+        "question_index": {
+            "question-06": {
+                "question_id": "question-06",
+                "title": "您对卧室里的光线、声音敏感度如何？",
+                "input_type": "radio",
+                "options": [
+                    {"option_id": "B", "label": "轻微敏感，但影响不大", "aliases": []},
+                    {"option_id": "D", "label": "一点微光或细小声音就会惊醒", "aliases": []},
+                    {"option_id": "E", "label": "必须绝对黑暗安静", "aliases": []},
+                ],
+                "tags": ["人格判定"],
+                "metadata": {"matching_hints": ["声光", "敏感"]},
+            }
+        },
+    }
+    provider = FakeLLMProvider(
+        responses={
+            "layer1/turn_classify.md": """
+            {
+              "main_branch": "non_content",
+              "non_content_intent": "pullback_chat",
+              "normalized_input": "比较敏感"
+            }
+            """
+        }
+    )
+    graph_state = create_graph_state(
+        session_id="session-l1-current-question-guard",
+        channel="grpc",
+        quiz_mode="dynamic",
+        question_catalog=question_catalog,
+        language_preference="zh-CN",
+    )
+    graph_state["runtime"]["llm_provider"] = provider
+    graph_state["session_memory"]["clarification_context"] = {
+        "question_id": "question-06",
+        "question_title": "您对卧室里的光线、声音敏感度如何？",
+        "kind": "pullback_chat",
+    }
+
+    result = TurnClassifyNode().run(
+        graph_state,
+        TurnInput(
+            session_id="session-l1-current-question-guard",
+            channel="grpc",
+            input_mode="message",
+            raw_input="比较敏感",
+            language_preference="zh-CN",
+        ),
+    )
+
+    assert result["state_patch"]["turn"]["main_branch"] == "content"
+    assert result["state_patch"]["turn"]["non_content_intent"] == "none"
+
+
+def test_turn_classify_overrides_pullback_for_current_question_without_clarification_context() -> None:
+    question_catalog = {
+        "question_order": ["question-06"],
+        "question_index": {
+            "question-06": {
+                "question_id": "question-06",
+                "title": "您对卧室里的光线、声音敏感度如何？",
+                "input_type": "radio",
+                "options": [
+                    {"option_id": "B", "label": "轻微敏感，但影响不大", "aliases": []},
+                    {"option_id": "D", "label": "一点微光或细小声音就会惊醒", "aliases": []},
+                    {"option_id": "E", "label": "必须绝对黑暗安静", "aliases": []},
+                ],
+                "tags": ["人格判定"],
+                "metadata": {"matching_hints": ["声光", "敏感"]},
+            }
+        },
+    }
+    provider = FakeLLMProvider(
+        responses={
+            "layer1/turn_classify.md": """
+            {
+              "main_branch": "non_content",
+              "non_content_intent": "pullback_chat",
+              "normalized_input": "比较敏感"
+            }
+            """
+        }
+    )
+    graph_state = create_graph_state(
+        session_id="session-l1-current-question-only",
+        channel="grpc",
+        quiz_mode="dynamic",
+        question_catalog=question_catalog,
+        language_preference="zh-CN",
+    )
+    graph_state["runtime"]["llm_provider"] = provider
+    graph_state["session_memory"]["current_question_id"] = "question-06"
+
+    result = TurnClassifyNode().run(
+        graph_state,
+        TurnInput(
+            session_id="session-l1-current-question-only",
+            channel="grpc",
+            input_mode="message",
+            raw_input="比较敏感",
             language_preference="zh-CN",
         ),
     )

@@ -57,6 +57,21 @@ python -m somni_graph_quiz.adapters.grpc
 
 The default repository deployment target is port `18000`.
 
+## Regenerate gRPC Artifacts
+
+The vendored Python gRPC stubs under `src/somni_quiz_ai/grpc/generated/` are kept compatible with
+runtime environments that still use `grpcio 1.78.x`.
+
+If you need to regenerate them locally, use a matching generator version first:
+
+```bash
+python -m pip install "grpcio-tools==1.78.*"
+python -m grpc_tools.protoc -I proto --python_out=src/somni_quiz_ai/grpc/generated --grpc_python_out=src/somni_quiz_ai/grpc/generated proto/somni_quiz.proto
+```
+
+Regenerating with newer `grpcio-tools` can raise the minimum runtime version in
+`somni_quiz_pb2_grpc.py` and break startup in older conda environments.
+
 ## Test
 
 ```bash

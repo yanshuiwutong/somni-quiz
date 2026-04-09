@@ -1,7 +1,11 @@
 """Integration tests for the minimal runtime engine."""
 
+from somni_quiz_ai.grpc.generated import somni_quiz_pb2
+
+from somni_graph_quiz.adapters.grpc.mapper import map_questionnaire_to_catalog
 from somni_graph_quiz.contracts.graph_state import create_graph_state
 from somni_graph_quiz.contracts.turn_input import TurnInput
+from somni_graph_quiz.llm.client import FakeLLMProvider
 from somni_graph_quiz.runtime.engine import GraphRuntimeEngine
 
 
@@ -80,7 +84,49 @@ def test_engine_routes_content_turn_and_updates_answer_record(question_catalog: 
         }
     ]
     assert result["pending_question"]["question_id"] == "question-02"
-    assert "next question" in result["assistant_message"].lower()
+    assert "what time do you usually sleep and wake?" in result["assistant_message"].lower()
+
+
+def test_engine_answered_response_ignores_llm_hallucinated_copy(question_catalog: dict) -> None:
+    provider = FakeLLMProvider(
+        responses={
+            "layer3/response_composer.md": """
+            {
+              "assistant_message": "已记下你关于睡眠受压力影响的相关选择，接下来请回答下一题。"
+            }
+            """
+        }
+    )
+    graph_state = create_graph_state(
+        session_id="session-grounded-copy",
+        channel="grpc",
+        quiz_mode="dynamic",
+        question_catalog=question_catalog,
+        language_preference="zh-CN",
+    )
+    graph_state["runtime"]["llm_provider"] = provider
+    engine = GraphRuntimeEngine()
+
+    result = engine.run_turn(graph_state, TurnInput(
+        session_id="session-grounded-copy",
+        channel="grpc",
+        input_mode="message",
+        raw_input="22",
+        language_preference="zh-CN",
+    ))
+
+    assert result["answer_record"]["answers"] == [
+        {
+            "question_id": "question-01",
+            "selected_options": [],
+            "input_value": "22",
+            "field_updates": {},
+        }
+    ]
+    assert result["pending_question"]["question_id"] == "question-02"
+    assert "压力" not in result["assistant_message"]
+    assert "What time do you usually sleep and wake?" in result["assistant_message"]
+    assert [call[0] for call in provider.calls].count("layer3/response_composer.md") == 1
 
 
 def test_engine_records_direct_answer_time_range_full(question_catalog: dict) -> None:
@@ -178,6 +224,319 @@ def test_engine_keeps_partial_schedule_and_asks_for_missing_field(question_catal
         "bedtime": "23:00"
     }
     assert "起床" in result["assistant_message"]
+
+
+def test_engine_keeps_wake_only_partial_schedule_and_asks_for_bedtime(question_catalog: dict) -> None:
+    graph_state = create_graph_state(
+        session_id="session-wake-only-partial",
+        channel="grpc",
+        quiz_mode="dynamic",
+        question_catalog=question_catalog,
+        language_preference="zh-CN",
+    )
+    graph_state["session_memory"]["current_question_id"] = "question-02"
+    graph_state["session_memory"]["pending_question_ids"] = ["question-02", "question-03", "question-04"]
+    engine = GraphRuntimeEngine()
+
+    result = engine.run_turn(graph_state, TurnInput(
+        session_id="session-wake-only-partial",
+        channel="grpc",
+        input_mode="message",
+        raw_input="11点起",
+        language_preference="zh-CN",
+    ))
+
+    assert result["answer_record"]["answers"] == []
+    assert result["pending_question"]["question_id"] == "question-02"
+    assert result["updated_graph_state"]["session_memory"]["pending_partial_answers"]["question-02"]["filled_fields"] == {
+        "wake_time": "11:00"
+    }
+    assert "几点睡" in result["assistant_message"]
+    assert "几点起床" not in result["assistant_message"]
+
+
+def test_engine_records_partial_schedule_after_answering_age_question(question_catalog: dict) -> None:
+    graph_state = create_graph_state(
+        session_id="session-age-then-schedule-partial",
+        channel="grpc",
+        quiz_mode="dynamic",
+        question_catalog=question_catalog,
+        language_preference="zh-CN",
+    )
+    engine = GraphRuntimeEngine()
+
+    answered_age = engine.run_turn(graph_state, TurnInput(
+        session_id="session-age-then-schedule-partial",
+        channel="grpc",
+        input_mode="message",
+        raw_input="22",
+        language_preference="zh-CN",
+    ))
+    result = engine.run_turn(answered_age["updated_graph_state"], TurnInput(
+        session_id="session-age-then-schedule-partial",
+        channel="grpc",
+        input_mode="message",
+        raw_input="11点起",
+        language_preference="zh-CN",
+    ))
+
+    assert result["answer_record"]["answers"] == [
+        {
+            "question_id": "question-01",
+            "selected_options": [],
+            "input_value": "22",
+            "field_updates": {},
+        }
+    ]
+    assert result["pending_question"]["question_id"] == "question-02"
+    assert result["updated_graph_state"]["session_memory"]["pending_partial_answers"]["question-02"]["filled_fields"] == {
+        "wake_time": "11:00"
+    }
+    assert result["updated_graph_state"]["session_memory"]["partial_question_ids"] == ["question-02"]
+    assert result["progress_percent"] > 25.0
+    assert "几点睡" in result["assistant_message"]
+
+
+def test_engine_records_partial_schedule_after_radio_age_answer_with_grpc_catalog() -> None:
+    question_catalog = map_questionnaire_to_catalog(
+        [
+            somni_quiz_pb2.BusinessQuestion(
+                question_id="question-01",
+                title="您的年龄段？",
+                input_type="radio",
+                tags=["基础信息"],
+                options=[
+                    somni_quiz_pb2.BusinessOption(option_id="A", option_text="18-24 岁"),
+                    somni_quiz_pb2.BusinessOption(option_id="B", option_text="25-34 岁"),
+                ],
+            ),
+            somni_quiz_pb2.BusinessQuestion(
+                question_id="question-02",
+                title="您平时通常的作息？",
+                input_type="time_range",
+                tags=["基础信息"],
+                config=somni_quiz_pb2.PendingQuestionConfig(
+                    items=[
+                        somni_quiz_pb2.PendingQuestionConfigItem(index=0, label="上床时间：", format="HH:mm"),
+                        somni_quiz_pb2.PendingQuestionConfigItem(index=1, label="起床时间：", format="HH:mm"),
+                    ]
+                ),
+            ),
+        ]
+    )
+    graph_state = create_graph_state(
+        session_id="session-radio-age-then-schedule-partial",
+        channel="grpc",
+        quiz_mode="dynamic",
+        question_catalog=question_catalog,
+        language_preference="zh-CN",
+    )
+    engine = GraphRuntimeEngine()
+
+    answered_age = engine.run_turn(graph_state, TurnInput(
+        session_id="session-radio-age-then-schedule-partial",
+        channel="grpc",
+        input_mode="direct_answer",
+        raw_input="A",
+        direct_answer_payload={
+            "question_id": "question-01",
+            "selected_options": ["A"],
+            "input_value": "",
+        },
+        language_preference="zh-CN",
+    ))
+    result = engine.run_turn(answered_age["updated_graph_state"], TurnInput(
+        session_id="session-radio-age-then-schedule-partial",
+        channel="grpc",
+        input_mode="message",
+        raw_input="11点起",
+        language_preference="zh-CN",
+    ))
+
+    assert result["pending_question"]["question_id"] == "question-02"
+    assert result["updated_graph_state"]["session_memory"]["pending_partial_answers"]["question-02"]["filled_fields"] == {
+        "wake_time": "11:00"
+    }
+    assert result["updated_graph_state"]["session_memory"]["partial_question_ids"] == ["question-02"]
+    assert "几点睡" in result["assistant_message"]
+
+
+def test_engine_records_partial_schedule_from_llm_understand_payload_after_radio_age_answer() -> None:
+    question_catalog = map_questionnaire_to_catalog(
+        [
+            somni_quiz_pb2.BusinessQuestion(
+                question_id="question-01",
+                title="您的年龄段？",
+                input_type="radio",
+                tags=["基础信息"],
+                options=[
+                    somni_quiz_pb2.BusinessOption(option_id="A", option_text="18-24 岁"),
+                    somni_quiz_pb2.BusinessOption(option_id="B", option_text="25-34 岁"),
+                ],
+            ),
+            somni_quiz_pb2.BusinessQuestion(
+                question_id="question-02",
+                title="您平时通常的作息？",
+                input_type="time_range",
+                tags=["基础信息"],
+                config=somni_quiz_pb2.PendingQuestionConfig(
+                    items=[
+                        somni_quiz_pb2.PendingQuestionConfigItem(index=0, label="上床时间：", format="HH:mm"),
+                        somni_quiz_pb2.PendingQuestionConfigItem(index=1, label="起床时间：", format="HH:mm"),
+                    ]
+                ),
+            ),
+        ]
+    )
+    graph_state = create_graph_state(
+        session_id="session-radio-age-llm-partial",
+        channel="grpc",
+        quiz_mode="dynamic",
+        question_catalog=question_catalog,
+        language_preference="zh-CN",
+    )
+    graph_state["runtime"]["llm_provider"] = FakeLLMProvider(
+        responses={
+            "layer2/content_understand.md": """
+            {
+              "content_units": [
+                {
+                  "unit_id": "unit-1",
+                  "unit_text": "11点起",
+                  "action_mode": "answer",
+                  "candidate_question_ids": ["question-02"],
+                  "winner_question_id": "question-02",
+                  "needs_attribution": false,
+                  "raw_extracted_value": "11点起",
+                  "selected_options": [],
+                  "input_value": "11点起",
+                  "field_updates": {"wake_time": "11:00"},
+                  "missing_fields": ["bedtime"]
+                }
+              ],
+              "clarification_needed": false,
+              "clarification_reason": null
+            }
+            """
+        }
+    )
+    engine = GraphRuntimeEngine()
+
+    answered_age = engine.run_turn(graph_state, TurnInput(
+        session_id="session-radio-age-llm-partial",
+        channel="grpc",
+        input_mode="direct_answer",
+        raw_input="A",
+        direct_answer_payload={
+            "question_id": "question-01",
+            "selected_options": ["A"],
+            "input_value": "",
+        },
+        language_preference="zh-CN",
+    ))
+    result = engine.run_turn(answered_age["updated_graph_state"], TurnInput(
+        session_id="session-radio-age-llm-partial",
+        channel="grpc",
+        input_mode="message",
+        raw_input="11点起",
+        language_preference="zh-CN",
+    ))
+
+    assert result["pending_question"]["question_id"] == "question-02"
+    assert result["updated_graph_state"]["session_memory"]["pending_partial_answers"]["question-02"]["filled_fields"] == {
+        "wake_time": "11:00"
+    }
+    assert result["updated_graph_state"]["session_memory"]["partial_question_ids"] == ["question-02"]
+    assert "几点睡" in result["assistant_message"]
+
+
+def test_engine_normalizes_invalid_llm_modify_action_to_partial_schedule_recording() -> None:
+    question_catalog = map_questionnaire_to_catalog(
+        [
+            somni_quiz_pb2.BusinessQuestion(
+                question_id="question-01",
+                title="您的年龄段？",
+                input_type="radio",
+                tags=["基础信息"],
+                options=[
+                    somni_quiz_pb2.BusinessOption(option_id="A", option_text="18-24 岁"),
+                    somni_quiz_pb2.BusinessOption(option_id="B", option_text="25-34 岁"),
+                ],
+            ),
+            somni_quiz_pb2.BusinessQuestion(
+                question_id="question-02",
+                title="您平时通常的作息？",
+                input_type="time_range",
+                tags=["基础信息"],
+                config=somni_quiz_pb2.PendingQuestionConfig(
+                    items=[
+                        somni_quiz_pb2.PendingQuestionConfigItem(index=0, label="上床时间：", format="HH:mm"),
+                        somni_quiz_pb2.PendingQuestionConfigItem(index=1, label="起床时间：", format="HH:mm"),
+                    ]
+                ),
+            ),
+        ]
+    )
+    graph_state = create_graph_state(
+        session_id="session-radio-age-llm-invalid-action",
+        channel="grpc",
+        quiz_mode="dynamic",
+        question_catalog=question_catalog,
+        language_preference="zh-CN",
+    )
+    graph_state["runtime"]["llm_provider"] = FakeLLMProvider(
+        responses={
+            "layer2/content_understand.md": """
+            {
+              "content_units": [
+                {
+                  "unit_id": "unit-1",
+                  "unit_text": "11点起",
+                  "action_mode": "modify",
+                  "candidate_question_ids": ["question-02"],
+                  "winner_question_id": "question-02",
+                  "needs_attribution": false,
+                  "raw_extracted_value": "11点起",
+                  "selected_options": [],
+                  "input_value": "",
+                  "field_updates": {"wake_time": "11:00"},
+                  "missing_fields": ["bedtime"]
+                }
+              ],
+              "clarification_needed": false,
+              "clarification_reason": null
+            }
+            """
+        }
+    )
+    engine = GraphRuntimeEngine()
+
+    answered_age = engine.run_turn(graph_state, TurnInput(
+        session_id="session-radio-age-llm-invalid-action",
+        channel="grpc",
+        input_mode="direct_answer",
+        raw_input="A",
+        direct_answer_payload={
+            "question_id": "question-01",
+            "selected_options": ["A"],
+            "input_value": "",
+        },
+        language_preference="zh-CN",
+    ))
+    result = engine.run_turn(answered_age["updated_graph_state"], TurnInput(
+        session_id="session-radio-age-llm-invalid-action",
+        channel="grpc",
+        input_mode="message",
+        raw_input="11点起",
+        language_preference="zh-CN",
+    ))
+
+    assert result["pending_question"]["question_id"] == "question-02"
+    assert result["updated_graph_state"]["session_memory"]["pending_partial_answers"]["question-02"]["filled_fields"] == {
+        "wake_time": "11:00"
+    }
+    assert result["updated_graph_state"]["session_memory"]["partial_question_ids"] == ["question-02"]
+    assert "几点睡" in result["assistant_message"]
 
 
 def test_engine_completes_partial_schedule_on_followup(question_catalog: dict) -> None:
@@ -344,6 +703,48 @@ def test_engine_keeps_skipped_partial_when_followup_input_targets_other_question
     ] == {"bedtime": "23:00"}
     assert answered_age["updated_graph_state"]["session_memory"]["skipped_question_ids"] == ["question-02"]
     assert answered_age["pending_question"]["question_id"] == "question-03"
+
+
+def test_engine_free_sleep_answer_moves_forward_without_reasking_regular_schedule(
+    question_catalog: dict,
+) -> None:
+    graph_state = create_graph_state(
+        session_id="session-free-sleep-followup",
+        channel="grpc",
+        quiz_mode="dynamic",
+        question_catalog=question_catalog,
+        language_preference="zh-CN",
+    )
+    graph_state["session_memory"]["answered_records"]["question-02"] = {
+        "question_id": "question-02",
+        "selected_options": [],
+        "input_value": "23:00-07:00",
+        "field_updates": {"bedtime": "23:00", "wake_time": "07:00"},
+    }
+    graph_state["session_memory"]["answered_question_ids"] = ["question-02"]
+    graph_state["session_memory"]["unanswered_question_ids"] = ["question-01", "question-03", "question-04"]
+    graph_state["session_memory"]["question_states"]["question-02"] = {
+        "status": "answered",
+        "attempt_count": 0,
+        "last_action_mode": "answer",
+    }
+    graph_state["session_memory"]["current_question_id"] = "question-03"
+    graph_state["session_memory"]["pending_question_ids"] = ["question-03", "question-04"]
+    engine = GraphRuntimeEngine()
+
+    result = engine.run_turn(graph_state, TurnInput(
+        session_id="session-free-sleep-followup",
+        channel="grpc",
+        input_mode="message",
+        raw_input="7点",
+        language_preference="zh-CN",
+    ))
+
+    answers = {item["question_id"]: item for item in result["answer_record"]["answers"]}
+    assert answers["question-03"]["selected_options"] == ["D"]
+    assert result["pending_question"]["question_id"] == "question-04"
+    assert "作息" not in result["assistant_message"]
+    assert "wake" in result["assistant_message"].lower() or "起床" in result["assistant_message"]
 
 
 def test_engine_undo_restores_previous_answer(question_catalog: dict) -> None:
@@ -654,3 +1055,96 @@ def test_engine_does_not_force_unrelated_content_into_current_age_question() -> 
     assert sensitivity_answers["question-06"]["selected_options"] == ["B"]
     assert sensitivity_result["pending_question"]["question_id"] == "question-01"
     assert "年龄" in sensitivity_result["assistant_message"]
+
+
+def test_engine_pullback_chat_keeps_reanswer_context_for_sensitivity_question() -> None:
+    question_catalog = {
+        "question_order": ["question-06", "question-07"],
+        "question_index": {
+            "question-06": {
+                "question_id": "question-06",
+                "title": "您对卧室里的光线、声音敏感度如何？",
+                "description": "",
+                "input_type": "radio",
+                "options": [
+                    {"option_id": "A", "label": "完全不敏感，在哪都能睡", "aliases": []},
+                    {"option_id": "B", "label": "轻微敏感，但影响不大", "aliases": []},
+                    {"option_id": "C", "label": "需要相对安静和避光的环境", "aliases": []},
+                    {"option_id": "D", "label": "一点微光或细小声音就会惊醒", "aliases": []},
+                    {"option_id": "E", "label": "必须绝对黑暗安静", "aliases": []},
+                ],
+                "tags": ["人格判定"],
+                "metadata": {
+                    "allow_partial": False,
+                    "structured_kind": "radio",
+                    "response_style": "default",
+                    "matching_hints": ["声光", "敏感"],
+                },
+            },
+            "question-07": {
+                "question_id": "question-07",
+                "title": "最影响你睡好的问题是哪一个？",
+                "description": "",
+                "input_type": "radio",
+                "options": [
+                    {"option_id": "A", "label": "睡前总想事或刷手机，静不下来", "aliases": []},
+                ],
+                "tags": ["核心锚点"],
+                "metadata": {
+                    "allow_partial": False,
+                    "structured_kind": "radio",
+                    "response_style": "default",
+                    "matching_hints": ["困扰"],
+                },
+            },
+        },
+    }
+    provider = FakeLLMProvider(
+        responses={
+            "layer1/turn_classify.md": """
+            {
+              "main_branch": "non_content",
+              "non_content_intent": "pullback_chat",
+              "normalized_input": "比较敏感"
+            }
+            """
+        }
+    )
+    graph_state = create_graph_state(
+        session_id="session-sensitivity-pullback",
+        channel="grpc",
+        quiz_mode="dynamic",
+        question_catalog=question_catalog,
+        language_preference="zh-CN",
+    )
+    graph_state["runtime"]["llm_provider"] = provider
+    engine = GraphRuntimeEngine()
+
+    pullback_result = engine.run_turn(graph_state, TurnInput(
+        session_id="session-sensitivity-pullback",
+        channel="grpc",
+        input_mode="message",
+        raw_input="你好",
+        language_preference="zh-CN",
+    ))
+
+    assert pullback_result["answer_record"]["answers"] == []
+    assert pullback_result["pending_question"]["question_id"] == "question-06"
+    assert pullback_result["updated_graph_state"]["session_memory"]["clarification_context"] == {
+        "question_id": "question-06",
+        "question_title": "您对卧室里的光线、声音敏感度如何？",
+        "kind": "pullback_chat",
+    }
+
+    answered_result = engine.run_turn(pullback_result["updated_graph_state"], TurnInput(
+        session_id="session-sensitivity-pullback",
+        channel="grpc",
+        input_mode="message",
+        raw_input="比较敏感",
+        language_preference="zh-CN",
+    ))
+
+    answers = {item["question_id"]: item for item in answered_result["answer_record"]["answers"]}
+    assert answers["question-06"]["selected_options"] == ["D"]
+    assert answered_result["pending_question"]["question_id"] == "question-07"
+    assert answered_result["updated_graph_state"]["session_memory"]["clarification_context"] is None

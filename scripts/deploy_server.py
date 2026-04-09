@@ -5,6 +5,7 @@ import os
 import tarfile
 import tempfile
 from pathlib import Path
+from pathlib import PurePosixPath
 
 import paramiko
 
@@ -60,7 +61,29 @@ def _run_allow_failure(ssh: paramiko.SSHClient, command: str, timeout: int = 300
     return out + err
 
 
-def _streamlit_unit(conda_root: str, env_name: str) -> str:
+def _env_python_path(conda_bin: str, env_name: str) -> str:
+    conda_path = PurePosixPath(conda_bin)
+    conda_root = conda_path.parent.parent
+    return str(conda_root / "envs" / env_name / "bin" / "python")
+
+
+def _connect_ssh(args: argparse.Namespace) -> paramiko.SSHClient:
+    ssh = paramiko.SSHClient()
+    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    ssh.connect(
+        hostname=args.host,
+        username=args.user,
+        password=args.password,
+        timeout=20,
+        banner_timeout=20,
+        auth_timeout=20,
+        look_for_keys=False,
+        allow_agent=False,
+    )
+    return ssh
+
+
+def _streamlit_unit(env_python: str) -> str:
     return f"""[Unit]
 Description=Somni Graph Quiz Streamlit (51062)
 After=network.target
@@ -70,7 +93,7 @@ Type=simple
 User=root
 WorkingDirectory={REMOTE_ROOT}
 EnvironmentFile={REMOTE_ROOT}/.env
-ExecStart={conda_root} run -n {env_name} python -m streamlit run {REMOTE_ROOT}/app.py --server.address 0.0.0.0 --server.port {STREAMLIT_PORT} --server.headless true --browser.gatherUsageStats false
+ExecStart={env_python} -m streamlit run {REMOTE_ROOT}/app.py --server.address 0.0.0.0 --server.port {STREAMLIT_PORT} --server.headless true --browser.gatherUsageStats false
 Restart=always
 RestartSec=3
 
@@ -79,7 +102,7 @@ WantedBy=multi-user.target
 """
 
 
-def _grpc_unit(conda_root: str, env_name: str) -> str:
+def _grpc_unit(env_python: str) -> str:
     return f"""[Unit]
 Description=Somni Graph Quiz gRPC (18000)
 After=network.target
@@ -90,7 +113,7 @@ User=root
 WorkingDirectory={REMOTE_ROOT}
 EnvironmentFile={REMOTE_ROOT}/.env
 Environment=SOMNI_GRPC_PORT={GRPC_PORT}
-ExecStart={conda_root} run -n {env_name} python -m somni_graph_quiz.adapters.grpc
+ExecStart={env_python} -m somni_graph_quiz.adapters.grpc
 Restart=always
 RestartSec=3
 
@@ -121,17 +144,9 @@ def main() -> None:
 
     archive = _build_archive()
     env_text = _load_env_text()
+    env_python = _env_python_path(args.conda_bin, args.env_name)
 
-    ssh = paramiko.SSHClient()
-    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    ssh.connect(
-        args.host,
-        username=args.user,
-        password=args.password,
-        timeout=20,
-        banner_timeout=20,
-        auth_timeout=20,
-    )
+    ssh = _connect_ssh(args)
     try:
         _run(ssh, f"mkdir -p {args.remote_root}")
         sftp = ssh.open_sftp()
@@ -140,22 +155,23 @@ def main() -> None:
             with sftp.open(f"{args.remote_root}/.env", "w") as handle:
                 handle.write(env_text)
             with sftp.open(SYSTEMD_STREAMLIT_UNIT, "w") as handle:
-                handle.write(_streamlit_unit(args.conda_bin, args.env_name))
+                handle.write(_streamlit_unit(env_python))
             with sftp.open(SYSTEMD_GRPC_UNIT, "w") as handle:
-                handle.write(_grpc_unit(args.conda_bin, args.env_name))
+                handle.write(_grpc_unit(env_python))
         finally:
             sftp.close()
 
+        _run(ssh, f"find {args.remote_root} -mindepth 1 -maxdepth 1 ! -name .env -exec rm -rf {{}} +")
         _run(ssh, f"tar -xzf /tmp/somni-graph-quiz.tar.gz -C {args.remote_root}")
         _run_allow_failure(
             ssh,
             (
-                f"bash -lc 'if [ ! -x /root/miniconda3/envs/{args.env_name}/bin/python ]; "
+                f"bash -lc 'if [ ! -x {env_python} ]; "
                 f"then {args.conda_bin} create -y -n {args.env_name} python=3.11; fi'"
             ),
             timeout=1800,
         )
-        _run(ssh, f"{args.conda_bin} run -n {args.env_name} python -m pip install -e {args.remote_root}", timeout=1800)
+        _run(ssh, f"{env_python} -m pip install -e {args.remote_root}", timeout=1800)
         _refresh_services(ssh)
     finally:
         ssh.close()

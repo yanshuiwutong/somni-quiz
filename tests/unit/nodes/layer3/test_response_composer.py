@@ -1,10 +1,21 @@
 """Tests for response composition."""
 
+import json
 from types import SimpleNamespace
 
 from somni_graph_quiz.contracts.finalized_turn_context import create_finalized_turn_context
 from somni_graph_quiz.llm.client import FakeLLMProvider
 from somni_graph_quiz.nodes.layer3.respond import ResponseComposerNode
+
+
+def _extract_payload_from_prompt(prompt_text: str) -> dict:
+    marker = "## Input Payload"
+    start = prompt_text.index(marker)
+    payload_section = prompt_text[start:]
+    json_block_start = payload_section.index("```json") + len("```json")
+    json_block_end = payload_section.index("```", json_block_start)
+    json_text = payload_section[json_block_start:json_block_end].strip()
+    return json.loads(json_text)
 
 
 def test_response_composer_uses_chinese_for_non_english_language() -> None:
@@ -107,6 +118,133 @@ def test_response_composer_uses_llm_when_available() -> None:
     assert len(provider.calls) == 1
 
 
+def test_response_composer_partial_recorded_zh_only_missing_bedtime() -> None:
+    finalized = create_finalized_turn_context(
+        turn_outcome="partial_recorded",
+        updated_answer_record={"answers": []},
+        updated_question_states={},
+        current_question_id="question-02",
+        next_question={"question_id": "question-02", "title": "作息"},
+        finalized=False,
+        response_language="zh-CN",
+        response_facts={
+            "partial_followup": {"missing_fields": ["bedtime"]},
+        },
+    )
+
+    message = ResponseComposerNode().run(finalized)
+
+    assert message == "已先记下你的起床时间，请告诉我你通常几点睡吧。"
+
+
+def test_response_composer_partial_recorded_zh_only_missing_wake_time() -> None:
+    finalized = create_finalized_turn_context(
+        turn_outcome="partial_recorded",
+        updated_answer_record={"answers": []},
+        updated_question_states={},
+        current_question_id="question-02",
+        next_question={"question_id": "question-02", "title": "作息"},
+        finalized=False,
+        response_language="zh-CN",
+        response_facts={
+            "partial_followup": {"missing_fields": ["wake_time"]},
+        },
+    )
+
+    message = ResponseComposerNode().run(finalized)
+
+    assert message == "已先记下你的入睡时间，请再告诉我你通常几点起床。"
+
+
+def test_response_composer_partial_recorded_en_only_missing_bedtime() -> None:
+    finalized = create_finalized_turn_context(
+        turn_outcome="partial_recorded",
+        updated_answer_record={"answers": []},
+        updated_question_states={},
+        current_question_id="question-02",
+        next_question={"question_id": "question-02", "title": "Next question"},
+        finalized=False,
+        response_language="en",
+        response_facts={
+            "partial_followup": {"missing_fields": ["bedtime"]},
+        },
+    )
+
+    message = ResponseComposerNode().run(finalized)
+
+    assert message == "I've noted your wake-up time; please tell me when you usually go to sleep."
+
+
+def test_response_composer_partial_recorded_en_only_missing_wake_time() -> None:
+    finalized = create_finalized_turn_context(
+        turn_outcome="partial_recorded",
+        updated_answer_record={"answers": []},
+        updated_question_states={},
+        current_question_id="question-02",
+        next_question={"question_id": "question-02", "title": "Next question"},
+        finalized=False,
+        response_language="en",
+        response_facts={
+            "partial_followup": {"missing_fields": ["wake_time"]},
+        },
+    )
+
+    message = ResponseComposerNode().run(finalized)
+
+    assert message == "I've noted your bedtime; please tell me when you usually wake up."
+
+
+def test_response_composer_partial_recorded_en_uses_generic_message_for_multiple_missing_fields() -> None:
+    finalized = create_finalized_turn_context(
+        turn_outcome="partial_recorded",
+        updated_answer_record={"answers": []},
+        updated_question_states={},
+        current_question_id="question-02",
+        next_question={"question_id": "question-02", "title": "Next question"},
+        finalized=False,
+        response_language="en",
+        response_facts={
+            "partial_followup": {"missing_fields": ["bedtime", "wake_time"]},
+        },
+    )
+
+    message = ResponseComposerNode().run(finalized)
+
+    assert message == "I noted part of your schedule. What time do you wake up?"
+
+
+def test_response_composer_llm_payload_includes_partial_followup() -> None:
+    provider = FakeLLMProvider(
+        responses={
+            "layer3/response_composer.md": """
+            {
+              "assistant_message": "感谢"
+            }
+            """
+        }
+    )
+    partial_followup = {"missing_fields": ["wake_time"]}
+    finalized = create_finalized_turn_context(
+        turn_outcome="partial_recorded",
+        updated_answer_record={"answers": []},
+        updated_question_states={},
+        current_question_id="question-02",
+        next_question={"question_id": "question-02", "title": "Next question"},
+        finalized=False,
+        response_language="en",
+        response_facts={
+            "llm_provider": provider,
+            "llm_available": True,
+            "partial_followup": partial_followup,
+        },
+    )
+
+    ResponseComposerNode().run(finalized)
+
+    payload = _extract_payload_from_prompt(provider.calls[0][1])
+
+    assert payload["partial_followup"] == partial_followup
+
 def test_response_composer_falls_back_when_llm_output_is_invalid() -> None:
     provider = FakeLLMProvider(
         responses={"layer3/response_composer.md": "oops"}
@@ -129,6 +267,56 @@ def test_response_composer_falls_back_when_llm_output_is_invalid() -> None:
 
     assert "next question" in message.lower()
     assert len(provider.calls) == 1
+
+
+def test_response_composer_answered_mentions_recorded_fact_before_next_question() -> None:
+    finalized = create_finalized_turn_context(
+        turn_outcome="answered",
+        updated_answer_record={"answers": [{"question_id": "question-03", "selected_options": ["D"]}]},
+        updated_question_states={},
+        current_question_id="question-04",
+        next_question={"question_id": "question-04", "title": "完全自由安排时，您最自然的起床时间是？"},
+        finalized=False,
+        response_language="zh-CN",
+        response_facts={
+            "recorded_question_summaries": [
+                {
+                    "question_id": "question-03",
+                    "title": "完全自由安排时，您最自然的入睡时间是？",
+                }
+            ]
+        },
+    )
+
+    message = ResponseComposerNode().run(finalized)
+
+    assert "入睡时间" in message
+    assert "起床时间" in message
+
+
+def test_response_composer_modified_has_specific_fallback_message() -> None:
+    finalized = create_finalized_turn_context(
+        turn_outcome="modified",
+        updated_answer_record={"answers": [{"question_id": "question-03", "selected_options": ["D"]}]},
+        updated_question_states={},
+        current_question_id="question-04",
+        next_question={"question_id": "question-04", "title": "完全自由安排时，您最自然的起床时间是？"},
+        finalized=False,
+        response_language="zh-CN",
+        response_facts={
+            "modified_question_summaries": [
+                {
+                    "question_id": "question-03",
+                    "title": "完全自由安排时，您最自然的入睡时间是？",
+                }
+            ]
+        },
+    )
+
+    message = ResponseComposerNode().run(finalized)
+
+    assert "更新" in message or "改" in message
+    assert "起床时间" in message
 
 
 def test_response_composer_reanchors_identity_pullback_to_current_question() -> None:
@@ -362,3 +550,180 @@ def test_response_composer_completed_uses_llm_personalized_message_with_answer_r
     assert len(provider.calls) == 1
     assert "question-02" in provider.calls[0][1]
     assert "23:00" in provider.calls[0][1]
+
+
+def test_response_composer_weather_success_pulls_back_to_current_question() -> None:
+    finalized = SimpleNamespace(
+        raw_input="今天天气怎么样",
+        input_mode="message",
+        main_branch="non_content",
+        non_content_intent="weather_query",
+        turn_outcome="pullback",
+        current_question={"question_id": "question-01", "title": "您的年龄段？", "input_type": "radio"},
+        next_question={"question_id": "question-01", "title": "您的年龄段？", "input_type": "radio"},
+        finalized=False,
+        response_language="zh-CN",
+        response_facts={
+            "non_content_mode": "weather",
+            "non_content_action": "weather_query",
+            "weather_status": "success",
+            "weather_city": "北京",
+            "weather_summary": "晴，22C",
+        },
+    )
+
+    message = ResponseComposerNode().run(finalized)
+
+    assert "北京" in message
+    assert "晴" in message
+    assert "年龄段" in message
+
+
+def test_response_composer_weather_missing_city_asks_for_city() -> None:
+    finalized = SimpleNamespace(
+        raw_input="今天天气怎么样",
+        input_mode="message",
+        main_branch="non_content",
+        non_content_intent="weather_query",
+        turn_outcome="pullback",
+        current_question={"question_id": "question-01", "title": "您的年龄段？", "input_type": "radio"},
+        next_question={"question_id": "question-01", "title": "您的年龄段？", "input_type": "radio"},
+        finalized=False,
+        response_language="zh-CN",
+        response_facts={
+            "non_content_mode": "weather",
+            "non_content_action": "weather_query",
+            "weather_status": "missing_city",
+        },
+    )
+
+    message = ResponseComposerNode().run(finalized)
+
+    assert "城市" in message
+    assert "年龄段" not in message
+
+
+def test_response_composer_answered_uses_llm_with_turn_scoped_prompt() -> None:
+    provider = FakeLLMProvider(
+        responses={
+            "layer3/response_composer.md": """
+            {
+              "assistant_message": "已记下你关于完全自由安排时，您最自然的入睡时间是？的回答。接下来请回答完全自由安排时，您最自然的起床时间是？。"
+            }
+            """
+        }
+    )
+    finalized = create_finalized_turn_context(
+        turn_outcome="answered",
+        updated_question_states={},
+        current_question_id="question-04",
+        next_question={"question_id": "question-04", "title": "完全自由安排时，您最自然的起床时间是？"},
+        finalized=False,
+        response_language="zh-CN",
+        response_facts={
+            "llm_provider": provider,
+            "llm_available": True,
+            "recorded_question_summaries": [
+                {
+                    "question_id": "question-03",
+                    "title": "完全自由安排时，您最自然的入睡时间是？",
+                }
+            ],
+        },
+        current_question={"question_id": "question-03", "title": "完全自由安排时，您最自然的入睡时间是？"},
+        updated_answer_record={
+            "answers": [
+                {"question_id": "question-03", "selected_options": ["B"]},
+                {"question_id": "question-99", "input_value": "无关历史压力题"},
+            ]
+        },
+    )
+
+    message = ResponseComposerNode().run(finalized)
+
+    assert "入睡时间" in message
+    assert "起床时间" in message
+    assert len(provider.calls) == 1
+    assert "无关历史压力题" not in provider.calls[0][1]
+    assert "完全自由安排时，您最自然的入睡时间是？" in provider.calls[0][1]
+
+
+def test_response_composer_answered_falls_back_when_llm_output_drifts_to_unrelated_topic() -> None:
+    provider = FakeLLMProvider(
+        responses={
+            "layer3/response_composer.md": """
+            {
+              "assistant_message": "已记下你关于睡眠受压力影响的相关选择，接下来请回答下一题。"
+            }
+            """
+        }
+    )
+    finalized = create_finalized_turn_context(
+        turn_outcome="answered",
+        updated_answer_record={"answers": [{"question_id": "question-03", "selected_options": ["B"]}]},
+        updated_question_states={},
+        current_question_id="question-04",
+        next_question={"question_id": "question-04", "title": "完全自由安排时，您最自然的起床时间是？"},
+        finalized=False,
+        response_language="zh-CN",
+        response_facts={
+            "llm_provider": provider,
+            "llm_available": True,
+            "recorded_question_summaries": [
+                {
+                    "question_id": "question-03",
+                    "title": "完全自由安排时，您最自然的入睡时间是？",
+                }
+            ],
+        },
+    )
+
+    message = ResponseComposerNode().run(finalized)
+
+    assert "入睡时间" in message
+    assert "起床时间" in message
+    assert "压力" not in message
+    assert len(provider.calls) == 1
+
+
+def test_response_composer_modified_uses_llm_with_turn_scoped_prompt() -> None:
+    provider = FakeLLMProvider(
+        responses={
+            "layer3/response_composer.md": """
+            {
+              "assistant_message": "已更新你关于完全自由安排时，您最自然的入睡时间是？的回答。接下来请回答完全自由安排时，您最自然的起床时间是？。"
+            }
+            """
+        }
+    )
+    finalized = create_finalized_turn_context(
+        turn_outcome="modified",
+        updated_question_states={},
+        current_question_id="question-04",
+        next_question={"question_id": "question-04", "title": "完全自由安排时，您最自然的起床时间是？"},
+        finalized=False,
+        response_language="zh-CN",
+        response_facts={
+            "llm_provider": provider,
+            "llm_available": True,
+            "modified_question_summaries": [
+                {
+                    "question_id": "question-03",
+                    "title": "完全自由安排时，您最自然的入睡时间是？",
+                }
+            ],
+        },
+        updated_answer_record={
+            "answers": [
+                {"question_id": "question-03", "selected_options": ["B"]},
+                {"question_id": "question-99", "input_value": "无关历史压力题"},
+            ]
+        },
+    )
+
+    message = ResponseComposerNode().run(finalized)
+
+    assert "更新" in message
+    assert "起床时间" in message
+    assert len(provider.calls) == 1
+    assert "无关历史压力题" not in provider.calls[0][1]

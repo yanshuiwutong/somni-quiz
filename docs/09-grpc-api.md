@@ -2,18 +2,23 @@
 
 ## 1. 文档定位
 
-本文档只描述当前仓库里已经实现的 gRPC adapter 行为，不覆盖历史老项目接口约定，也不把尚未实现的目标态能力写成现状。
+本文档只描述当前仓库中已经实现的 gRPC adapter 行为，以 [somni_quiz.proto](/G:/somni/somni-graph-quiz/proto/somni_quiz.proto) 与当前 service/mapper 实现为准，不覆盖历史老项目约定，也不把未实现的目标态能力写成现状。
 
 当前实现特点：
 
-- 使用 [somni_quiz.proto](/G:/somni/somni-graph-quiz/proto/somni_quiz.proto) 定义 `somni.quiz.v1.QuizService`
+- 使用 `somni.quiz.v1.QuizService`
 - 提供两个 RPC：
   - `InitQuiz`
   - `ChatQuiz`
 - 运行态为进程内内存会话
 - 适配层默认按 `dynamic` 方式工作
+- `InitQuiz` 对同一进程内已存在的 `session_id` 会优先恢复当前内存会话
 - `InitQuizRequest.answer_record` 当前保留在 proto 中，但 adapter 不使用它做恢复初始化
 - `ChatQuizRequest` 同时传 `message` 和 `direct_answer` 时，当前实现优先走 `direct_answer`
+- `ChatQuizResponse.answer_status_code` 显式返回本轮记录状态
+- `InitQuizResponse.progress_percent` 与 `ChatQuizResponse.progress_percent` 显式返回当前答题进度百分比
+- `InitQuizRequest.default_city` 可为当前会话提供默认天气查询城市；未传时不再回退固定城市
+- 天气查询当前按 `non_content` 处理，不进入答题记录与进度计算链路
 
 ## 2. 服务信息
 
@@ -25,21 +30,22 @@
 | Package | `somni.quiz.v1` |
 | Service | `QuizService` |
 | 方法 | `InitQuiz`、`ChatQuiz` |
-| 默认监听地址 | `0.0.0.0:19000` |
+| 本地默认监听地址 | `0.0.0.0:19000` |
 
-默认监听地址来自 [settings.py](/G:/somni/somni-graph-quiz/src/somni_graph_quiz/app/settings.py)：
+补充说明：
 
-- `SOMNI_GRPC_HOST`
-- `SOMNI_GRPC_PORT`
+- 本地默认地址来自 [settings.py](/G:/somni/somni-graph-quiz/src/somni_graph_quiz/app/settings.py) 中的 `SOMNI_GRPC_HOST` / `SOMNI_GRPC_PORT`
+- 部署时可通过环境变量覆盖
+- 当前服务器部署地址为 `43.138.100.224:18000`
 
 ## 3. 调用流程
 
 标准调用顺序：
 
 1. 调用 `InitQuiz`
-2. 服务端根据 `questionnaire` 创建会话，返回第一道待答题
+2. 服务端根据 `session_id` 判断是否恢复已有内存会话；若不存在则根据 `questionnaire` 创建新会话
 3. 循环调用 `ChatQuiz`
-4. 每轮返回最新 `answer_record` 和下一题
+4. 每轮返回最新 `answer_record`、`answer_status_code`、`progress_percent` 和下一题
 5. 当 `finalized=true` 时，响应中返回 `final_result`
 
 当前限制：
@@ -54,11 +60,12 @@
 - `questionnaire` 由调用方完整提供，adapter 会将其映射为 runtime 题库
 - `question_id` 应保持唯一；当前 adapter 不额外做重复 ID 保护
 - `PendingQuestion.qid` 当前直接等于 `question_id`
-- `InitQuizResponse.assistant_message` 当前直接使用首个 `pending_question.title`
+- `InitQuizResponse.assistant_message` 新会话时通常等于首个 `pending_question.title`；恢复会话时与当前会话状态对齐
 - `ChatQuiz` 可以走两种输入：
   - `message`
   - `direct_answer`
 - 如果 `direct_answer` 存在，adapter 当前不会再读取 `message`
+- `ChatQuizResponse.assistant_message` 是运行时生成的自然语言文案，不应把具体文本当成强契约
 - `final_result` 只在完成态返回，当前最小保证结构为：
   - `completion_message`
   - `finalized`
@@ -69,7 +76,7 @@
 
 #### 5.1.1 作用
 
-`InitQuiz` 用于创建一个新的内存会话，并返回当前第一道待答题。
+`InitQuiz` 用于创建新的内存会话，或恢复当前进程内已存在的会话，并返回当前待答题。
 
 #### 5.1.2 请求字段
 
@@ -80,21 +87,24 @@
 | `questionnaire` | `repeated BusinessQuestion` | 是 | 当前题库定义来源 |
 | `answer_record` | `AnswerRecord` | 否 | proto 保留字段；当前 adapter 不用于恢复 |
 | `quiz_mode` | `string` | 否 | 为空时按 `dynamic` 处理 |
+| `default_city` | `string` | 否 | 会话级默认天气城市；为空时表示当前会话没有默认城市 |
 
 #### 5.1.3 服务端处理
 
 当前 `InitQuiz` 的实际处理逻辑：
 
-1. 将 `questionnaire` 映射为内部 `question_catalog`
-2. 创建新的 `graph_state`
-3. 挂载 LLM 依赖
-4. 将会话保存在服务进程内存中
-5. 返回 `questionnaire` 中第一道题作为 `pending_question`
+1. 若当前进程内已存在同一 `session_id`，直接恢复该会话当前 `graph_state`
+2. 若当前进程内不存在该 `session_id`：
+   - 将 `questionnaire` 映射为内部 `question_catalog`
+   - 创建新的 `graph_state`，并写入 `default_city`
+   - 挂载运行时依赖
+   - 将会话保存在服务进程内存中
+3. 返回当前会话的 `pending_question`、`answer_record` 与 `progress_percent`
 
 当前不会做的事：
 
 - 不读取请求 `answer_record` 恢复进度
-- 不区分 `business_9` 与 `dynamic` 两套业务流程
+- 不区分 `business_9` 与 `dynamic` 两套独立业务流
 - 不返回复杂人格或评分结果
 
 #### 5.1.4 响应字段
@@ -104,10 +114,11 @@
 | `success` | `bool` | 成功时为 `true` |
 | `session_id` | `string` | 当前会话 ID |
 | `initialized` | `bool` | 成功初始化时为 `true` |
-| `assistant_message` | `string` | 当前实现等于首题标题 |
-| `pending_question` | `PendingQuestion` | 第一题 |
-| `answer_record` | `AnswerRecord` | 当前固定返回空答卷 |
+| `assistant_message` | `string` | 新会话时通常等于首题标题；恢复会话时对齐当前待答题或完成态兜底文案 |
+| `pending_question` | `PendingQuestion` | 当前待答题；完成态时可能为空 |
+| `answer_record` | `AnswerRecord` | 当前答卷快照；新会话通常为空，恢复会话时返回已有记录 |
 | `quiz_mode` | `string` | 回显当前会话模式 |
+| `progress_percent` | `double` | 当前答题进度百分比；新会话通常为 `0.0`，恢复会话时为当前进度 |
 
 ### 5.2 ChatQuiz
 
@@ -116,6 +127,8 @@
 `ChatQuiz` 用于提交本轮输入、驱动 runtime 执行一轮问答，并返回：
 
 - 最新答卷快照
+- 本轮记录状态
+- 当前答题进度
 - 下一题
 - 完成态结果
 
@@ -148,12 +161,76 @@
 | --- | --- | --- |
 | `success` | `bool` | 成功时为 `true` |
 | `session_id` | `string` | 当前会话 ID |
-| `assistant_message` | `string` | 本轮回复文案；启用远端 LLM 时文本可能变化 |
-| `pending_question` | `PendingQuestion` | 下一题；完成态时为空对象 |
+| `assistant_message` | `string` | 本轮回复文案；文本内容依赖运行时状态与 LLM/规则路径 |
+| `pending_question` | `PendingQuestion` | 下一题；完成态或无待答题时为空 message |
 | `finalized` | `bool` | 是否完成 |
 | `answer_record` | `AnswerRecord` | 最新答卷快照 |
-| `final_result` | `Struct` | 完成态结果；未完成时为空 |
+| `final_result` | `Struct` | 完成态结果；未完成时通常为空 `Struct` |
 | `quiz_mode` | `string` | 会话模式回显 |
+| `answer_status_code` | `string` | 本轮答题记录状态码 |
+| `progress_percent` | `double` | 当前答题进度百分比 |
+
+补充说明：
+
+- 当前 `ChatQuiz` 支持天气类自然语言输入，例如 `今天天气怎么样`
+- 天气查询按 `non_content` 处理
+- 天气文案按“LLM 优先、固定模板兜底”生成，语言跟随会话 `language`
+- 天气查询成功后会把天气结果写进 `assistant_message`，同时继续返回当前待答题
+- 天气查询缺少城市时，会先在 `assistant_message` 中追问城市，本轮不拉回问卷
+- 天气查询回合不会写入 `answer_record`
+- 天气查询回合的 `answer_status_code` 为 `NOT_RECORDED`
+- 天气查询回合的 `progress_percent` 不变化
+
+#### 5.2.5 `answer_status_code` 取值
+
+当前 adapter 会根据本轮 `recent_turns` 最后一条 turn metadata 推导 `answer_status_code`。
+
+| 值 | 含义 |
+| --- | --- |
+| `RECORDED` | 本轮成功记录了新的答案 |
+| `UPDATED` | 本轮修改了既有答案，或执行了撤回后状态发生更新 |
+| `PARTIAL` | 本轮只记录了部分结构化答案，仍需补充 |
+| `NOT_RECORDED` | 本轮未形成有效记录 |
+
+当前实现细节：
+
+- 优先读取：
+  - `partial_question_ids`
+  - `modified_question_ids`
+  - `recorded_question_ids`
+- 若上面三类 metadata 都为空，则继续参考 `turn_outcome`
+- 当缺少可识别的 turn metadata / `turn_outcome` 时，返回 `NOT_RECORDED`
+
+#### 5.2.6 `progress_percent` 计算规则
+
+`progress_percent` 表示整份问卷当前完成百分比，计算规则为：
+
+- 完整答完 1 题记为 `1.0`
+- `partial` 题记为 `0.5`
+- 已完整记录的题不会再重复计 partial
+- 返回值为 `(完整题数 + partial * 0.5) / 总题数 * 100`
+- 当 `finalized=true` 时固定返回 `100.0`
+- 当总题数小于等于 0 时返回 `0.0`
+
+#### 5.2.7 未初始化会话的失败返回
+
+若调用方未先执行 `InitQuiz` 就直接调用 `ChatQuiz`，当前 adapter 会：
+
+- 设置 gRPC 状态码为 `FAILED_PRECONDITION`
+- 返回一个业务响应体，而不是抛出空响应
+
+当前明确保证的响应特征：
+
+| 字段 | 值 |
+| --- | --- |
+| `success` | `false` |
+| `session_id` | 请求中的 `session_id` |
+| `assistant_message` | `Session not initialized. Call InitQuiz first.` |
+| `answer_status_code` | `NOT_RECORDED` |
+
+说明：
+
+- 其他未显式赋值的 proto 字段在不同客户端序列化视图中可能表现为默认值或被省略
 
 ## 6. 公共类型说明
 
@@ -231,7 +308,7 @@
 - `value`
 - `direct_answer`
 
-`InitQuiz` 当前固定返回空答卷：
+新建会话时 `InitQuiz` 当前通常返回空答卷：
 
 ```json
 {
@@ -253,8 +330,8 @@
 
 注意：
 
-- 当前响应里的 `option_codes` 直接复用已记录的选项 ID
-- 当前 adapter 不再区分“内部标准 code”和“业务 option_id”两套返回值
+- 当前响应里的 `option_codes` 直接复用已记录的业务选项 ID
+- 当前 adapter 不区分“内部标准 code”和“业务 option_id”两套返回值
 - 文本题没有独立 `value.text` 字段；文本内容保存在 `direct_answer.input_value`
 
 ### 6.7 DirectAnswer
@@ -285,8 +362,9 @@
 说明：
 
 - 字段形状以 proto 和 adapter 为准
-- `assistant_message` 在启用远端 LLM 时可能与示例不同
-- 下面的示例按“未启用远端 LLM”的回退路径展示
+- 示例使用的是“JSON 形态的 protobuf 视图”
+- 不同客户端对默认值字段可能显示为空对象、默认值，或直接省略
+- `assistant_message` 为示意文案，真实文本可能因运行时状态和 LLM 可用性而变化
 
 ### 7.1 InitQuiz 最小请求
 
@@ -295,6 +373,7 @@
   "session_id": "session-1",
   "language": "zh-CN",
   "quiz_mode": "dynamic",
+  "default_city": "北京",
   "questionnaire": [
     {
       "question_id": "question-01",
@@ -341,7 +420,8 @@
     "answer_id": "",
     "answers": []
   },
-  "quiz_mode": "dynamic"
+  "quiz_mode": "dynamic",
+  "progress_percent": 0.0
 }
 ```
 
@@ -360,7 +440,7 @@
 {
   "success": true,
   "session_id": "session-1",
-  "assistant_message": "已记录，我们继续回答下一题：平时作息。",
+  "assistant_message": "已记录本轮答案，请继续回答下一题。",
   "pending_question": {
     "question_id": "question-02",
     "qid": "question-02",
@@ -393,7 +473,9 @@
     ]
   },
   "final_result": {},
-  "quiz_mode": "dynamic"
+  "quiz_mode": "dynamic",
+  "answer_status_code": "RECORDED",
+  "progress_percent": 50.0
 }
 ```
 
@@ -416,7 +498,7 @@
 {
   "success": true,
   "session_id": "session-1",
-  "assistant_message": "感谢你的分享。我已经大致了解了你的睡眠习惯，接下来会结合你记录下来的作息与感受，为你整理更适合你的专属声、光、香睡眠方案。",
+  "assistant_message": "感谢你的分享，我已经记录完成。",
   "pending_question": {},
   "finalized": true,
   "answer_record": {
@@ -449,10 +531,67 @@
     ]
   },
   "final_result": {
-    "completion_message": "感谢你的分享。我已经大致了解了你的睡眠习惯，接下来会结合你记录下来的作息与感受，为你整理更适合你的专属声、光、香睡眠方案。",
+    "completion_message": "感谢你的分享，我已经记录完成。",
     "finalized": true
   },
-  "quiz_mode": "dynamic"
+  "quiz_mode": "dynamic",
+  "answer_status_code": "RECORDED",
+  "progress_percent": 100.0
+}
+```
+
+### 7.7 ChatQuiz 天气查询响应
+
+```json
+{
+  "success": true,
+  "session_id": "session-1",
+  "assistant_message": "北京今天天气：晴，22C。我们继续回答年龄段。",
+  "pending_question": {
+    "question_id": "question-01",
+    "qid": "question-01",
+    "title": "年龄段",
+    "input_type": "text",
+    "tags": [],
+    "options": [],
+    "config": {}
+  },
+  "finalized": false,
+  "answer_record": {
+    "answer_id": "",
+    "answers": []
+  },
+  "final_result": {},
+  "quiz_mode": "dynamic",
+  "answer_status_code": "NOT_RECORDED",
+  "progress_percent": 0.0
+}
+```
+
+说明：
+
+- 若用户消息里显式给了城市，则优先使用用户显式城市
+- 若用户消息里未显式给城市，则尝试使用 `InitQuizRequest.default_city`
+- 若没有可用城市，当前实现会在 `assistant_message` 中追问城市
+- 当前版本只支持“今天天气 / 当前天气”这一类天气查询
+
+### 7.8 ChatQuiz 未初始化会话响应
+
+```json
+{
+  "success": false,
+  "session_id": "missing-session",
+  "assistant_message": "Session not initialized. Call InitQuiz first.",
+  "pending_question": {},
+  "finalized": false,
+  "answer_record": {
+    "answer_id": "",
+    "answers": []
+  },
+  "final_result": {},
+  "quiz_mode": "",
+  "answer_status_code": "NOT_RECORDED",
+  "progress_percent": 0.0
 }
 ```
 
@@ -464,7 +603,7 @@
 - `business_9` 独立业务流
 - `PendingQuestion.qid = Q01/Q02/...`
 - 完成态返回复杂 `persona / plan.stages` 结构
-- 统一规范化的 gRPC 错误码封装
+- 比 `FAILED_PRECONDITION` 更完整的统一错误包装协议
 
 这些字段或概念有的仍保留在 proto 中，但当前 adapter 并未实现对应行为。
 
@@ -474,14 +613,47 @@
 
 因为 `ChatQuiz` 依赖服务端内存中的会话快照。当前 adapter 不会在 `ChatQuiz` 中自动创建会话。
 
+如果跳过这一步，当前会返回：
+
+- gRPC 状态：`FAILED_PRECONDITION`
+- 业务字段：`success=false`
+- `answer_status_code=NOT_RECORDED`
+
 ### `InitQuizRequest.answer_record` 为什么没有生效？
 
 因为这个字段当前仅保留在 proto 里，adapter 还没有实现基于它的恢复初始化逻辑。
 
+### `default_city` 有什么作用？
+
+它是当前会话的默认天气城市，只影响天气查询类输入，不影响问卷答题逻辑。
+
+如果用户在天气消息里显式给了城市，则以用户显式城市为准；如果没有显式城市，则尝试使用 `default_city`；如果仍然没有可用城市，则会先追问城市。
+
 ### 为什么 `assistant_message` 可能和示例不同？
 
-因为当远端 LLM 可用时，响应层会优先走 LLM 文案生成；示例展示的是无远端 LLM 时的回退文案。
+因为 `assistant_message` 是运行时生成文案。`InitQuiz` 阶段当前通常等于首题标题，而 `ChatQuiz` 阶段会根据当前题目、记录结果以及 LLM/规则路径生成文本，所以不应把具体措辞当成强契约。
+
+### `answer_status_code` 应该怎么理解？
+
+可以按“本轮记录结果”理解，而不是“整份问卷总体状态”：
+
+- `RECORDED`：本轮记下了答案
+- `UPDATED`：本轮改了旧答案，或执行撤回后状态发生更新
+- `PARTIAL`：本轮只记下部分结构化字段
+- `NOT_RECORDED`：本轮没有形成有效记录
+
+### `progress_percent` 应该怎么理解？
+
+可以按“整份问卷当前完成百分比”理解：
+
+- 完整答完 1 题记为 `1.0` 题
+- `partial` 题记为 `0.5` 题
+- 返回值为 `(完整题数 + partial * 0.5) / 总题数 * 100`
+- 问卷全部完成后固定返回 `100.0`
 
 ### 服务重启后怎么继续？
 
-当前 adapter 是进程内内存态。服务重启后，会话会丢失，需要重新调用 `InitQuiz` 建立新会话。
+当前 adapter 是进程内内存态。
+
+- 同一服务进程内，重复调用同一 `session_id` 的 `InitQuiz` 可以恢复该会话
+- 服务重启后，会话仍会丢失，需要重新调用 `InitQuiz` 建立新会话

@@ -15,6 +15,7 @@ class TurnFinalizeNode:
         session_memory = updated_graph_state["session_memory"]
         turn_state = updated_graph_state["turn"]
         response_language = turn_state["response_language"]
+        partial_question_ids = branch_result.get("partial_question_ids", [])
         current_question = self._question_summary(
             get_question(updated_graph_state["question_catalog"], session_memory["current_question_id"])
         )
@@ -30,6 +31,19 @@ class TurnFinalizeNode:
         finalized = turn_outcome == "completed"
         response_facts = {
             **branch_result.get("response_facts", {}),
+            "recorded_question_summaries": self._question_summaries(
+                updated_graph_state["question_catalog"],
+                branch_result.get("applied_question_ids", []),
+            ),
+            "modified_question_summaries": self._question_summaries(
+                updated_graph_state["question_catalog"],
+                branch_result.get("modified_question_ids", []),
+            ),
+            "partial_question_summaries": self._question_summaries(
+                updated_graph_state["question_catalog"],
+                partial_question_ids,
+            ),
+            "active_followup_question_summary": next_question,
             "next_question_id": next_question_id,
             "finalized": finalized,
             "response_language": response_language,
@@ -37,6 +51,9 @@ class TurnFinalizeNode:
             "llm_provider": updated_graph_state["runtime"].get("llm_provider"),
         }
         updated_graph_state["runtime"]["finalized"] = finalized
+        partial_followup = self._partial_followup_data(session_memory, partial_question_ids)
+        if partial_followup is not None:
+            response_facts["partial_followup"] = partial_followup
         return create_finalized_turn_context(
             turn_outcome=turn_outcome,
             updated_answer_record={"answers": list(session_memory["answered_records"].values())},
@@ -60,6 +77,41 @@ class TurnFinalizeNode:
             "question_id": question.get("question_id"),
             "title": question.get("title"),
             "input_type": question.get("input_type"),
+        }
+
+    def _question_summaries(self, question_catalog: dict, question_ids: list[str]) -> list[dict]:
+        summaries: list[dict] = []
+        seen_question_ids: set[str] = set()
+        for question_id in question_ids:
+            normalized_question_id = str(question_id)
+            if not normalized_question_id or normalized_question_id in seen_question_ids:
+                continue
+            seen_question_ids.add(normalized_question_id)
+            summary = self._question_summary(get_question(question_catalog, normalized_question_id))
+            if summary is not None:
+                summaries.append(summary)
+        return summaries
+
+    def _partial_followup_data(
+        self,
+        session_memory: dict,
+        partial_question_ids: list[str],
+    ) -> dict | None:
+        if not partial_question_ids:
+            return None
+        question_id = str(partial_question_ids[0])
+        if not question_id:
+            return None
+        pending_partial_answers = session_memory.get("pending_partial_answers") or {}
+        partial_entry = pending_partial_answers.get(question_id)
+        if not partial_entry:
+            return None
+        filled_fields = partial_entry.get("filled_fields") or {}
+        missing_fields = partial_entry.get("missing_fields") or []
+        return {
+            "question_id": partial_entry.get("question_id", question_id),
+            "filled_fields": dict(filled_fields),
+            "missing_fields": list(missing_fields),
         }
 
     def _choose_next_question_id(self, graph_state: dict, branch_result: dict) -> str | None:

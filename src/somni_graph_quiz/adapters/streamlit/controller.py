@@ -12,6 +12,7 @@ from somni_graph_quiz.app.bootstrap import apply_runtime_dependencies
 from somni_graph_quiz.app.settings import GraphQuizSettings
 from somni_graph_quiz.contracts.graph_state import create_graph_state
 from somni_graph_quiz.contracts.turn_input import TurnInput
+from somni_graph_quiz.contracts.turn_result import calculate_progress_percent
 from somni_graph_quiz.runtime.engine import GraphRuntimeEngine
 
 
@@ -39,6 +40,7 @@ class StreamlitQuizController:
         questionnaire: list[dict],
         language_preference: str,
         quiz_mode: str,
+        default_city: str = "",
     ) -> dict:
         question_catalog = map_streamlit_questionnaire_to_catalog(questionnaire)
         graph_state = create_graph_state(
@@ -47,6 +49,7 @@ class StreamlitQuizController:
             quiz_mode=quiz_mode,
             question_catalog=question_catalog,
             language_preference=language_preference,
+            default_city=default_city,
         )
         apply_runtime_dependencies(graph_state)
         current_question = question_catalog["question_index"][graph_state["session_memory"]["current_question_id"]]
@@ -65,6 +68,12 @@ class StreamlitQuizController:
             pending_question=current_question,
             finalized=False,
             final_result=None,
+            progress_percent=calculate_progress_percent(
+                answered_question_ids=graph_state["session_memory"].get("answered_question_ids", []),
+                partial_question_ids=graph_state["session_memory"].get("partial_question_ids", []),
+                question_count=len(question_catalog.get("question_order", [])),
+                finalized=False,
+            ),
             quiz_mode=quiz_mode,
             chat_history=chat_history,
         )
@@ -91,6 +100,7 @@ class StreamlitQuizController:
             pending_question=result["pending_question"],
             finalized=result["finalized"],
             final_result=result["final_result"],
+            progress_percent=float(result.get("progress_percent", 0.0)),
             quiz_mode=session.quiz_mode,
             chat_history=list(session.chat_history),
         )
@@ -119,6 +129,7 @@ class StreamlitQuizController:
             pending_question=result["pending_question"],
             finalized=result["finalized"],
             final_result=result["final_result"],
+            progress_percent=float(result.get("progress_percent", 0.0)),
             quiz_mode=session.quiz_mode,
             chat_history=list(session.chat_history),
         )

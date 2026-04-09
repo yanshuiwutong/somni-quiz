@@ -21,6 +21,7 @@ def create_session_memory(question_catalog: dict) -> dict:
         "answered_records": {},
         "pending_partial_answers": {},
         "pending_modify_context": None,
+        "pending_weather_query": None,
         "skipped_question_ids": [],
         "previous_answer_record": None,
         "recent_turns": [],

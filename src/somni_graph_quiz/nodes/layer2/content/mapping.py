@@ -41,6 +41,14 @@ def map_content_value(question_id: str, raw_value: object) -> dict:
                 "input_value": str(raw_value.get("input_value", "")),
             }
         raw_text = str(raw_value.get("input_value", "")).strip()
+        if not raw_text and question_id == "question-03":
+            bedtime = raw_value.get("bedtime")
+            if bedtime:
+                raw_text = str(bedtime).strip()
+        if not raw_text and question_id == "question-04":
+            wake_time = raw_value.get("wake_time")
+            if wake_time:
+                raw_text = str(wake_time).strip()
     else:
         raw_text = str(raw_value).strip()
 

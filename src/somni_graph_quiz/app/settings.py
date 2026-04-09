@@ -30,6 +30,7 @@ class GraphQuizSettings(BaseSettings):
     llm_reasoning_effort: str = Field(default="minimal", alias="SOMNI_LLM_REASONING_EFFORT")
     grpc_host: str = Field(default="0.0.0.0", alias="SOMNI_GRPC_HOST")
     grpc_port: int = Field(default=19000, alias="SOMNI_GRPC_PORT")
+    weather_timeout: int = Field(default=10, alias="SOMNI_WEATHER_TIMEOUT")
 
     @property
     def llm_ready(self) -> bool:

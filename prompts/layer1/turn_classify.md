@@ -30,6 +30,7 @@
 - `skip`
 - `undo`
 - `modify_previous`
+- `weather_query`
 
 当 `main_branch = content` 时，`non_content_intent` 必须为 `none`。
 
@@ -63,6 +64,7 @@
 - 题库中的未来题、已答题、未答题都可能为本轮内容提供判断线索。
 - 即使当前题不匹配，只要输入明显在回答问卷中的其他题，也应选择 `content`。
 - `你是谁` 必须输出 `non_content + identity`。
+- 明确天气查询如 `今天天气怎么样`、`上海天气如何`、`今天会下雨吗`，输出 `non_content + weather_query`。
 - `你好 / 谢谢 / 哈哈 / hi / hello / thank` 这类寒暄或客套，优先输出 `non_content + pullback_chat`。
 - `查看上一题记录` 优先于一般 `查看记录`。
 - `改上一题` 优先于一般 `上一题`。

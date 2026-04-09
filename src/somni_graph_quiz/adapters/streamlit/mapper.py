@@ -42,6 +42,7 @@ def build_streamlit_view(
     pending_question: dict | None,
     finalized: bool,
     final_result: dict | None,
+    progress_percent: float,
     quiz_mode: str,
     chat_history: list[dict],
 ) -> dict:
@@ -53,6 +54,7 @@ def build_streamlit_view(
         "pending_question": pending_question,
         "finalized": finalized,
         "final_result": final_result,
+        "progress_percent": progress_percent,
         "quiz_mode": quiz_mode,
         "chat_history": chat_history,
     }

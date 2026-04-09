@@ -194,3 +194,43 @@ def test_finalize_includes_minimal_response_context(question_catalog: dict) -> N
         "title": question_catalog["question_index"]["question-02"]["title"],
         "input_type": question_catalog["question_index"]["question-02"]["input_type"],
     }
+
+
+def test_finalize_includes_partial_followup_details(question_catalog: dict) -> None:
+    graph_state = create_graph_state(
+        session_id="session-finalize-partial",
+        channel="grpc",
+        quiz_mode="dynamic",
+        question_catalog=question_catalog,
+        language_preference="zh-CN",
+    )
+    branch_result = {
+        "branch_type": "content",
+        "state_patch": {
+            "session_memory": {
+                "pending_partial_answers": {
+                    "question-02": {
+                        "question_id": "question-02",
+                        "filled_fields": {"bedtime": "23:00"},
+                        "missing_fields": ["wake_time"],
+                    }
+                },
+            }
+        },
+        "applied_question_ids": [],
+        "modified_question_ids": [],
+        "partial_question_ids": ["question-02"],
+        "skipped_question_ids": [],
+        "rejected_unit_ids": [],
+        "clarification_needed": False,
+        "response_facts": {},
+    }
+
+    finalized = TurnFinalizeNode().run(graph_state, branch_result)
+
+    assert finalized.turn_outcome == "partial_recorded"
+    assert finalized.response_facts["partial_followup"] == {
+        "question_id": "question-02",
+        "filled_fields": {"bedtime": "23:00"},
+        "missing_fields": ["wake_time"],
+    }

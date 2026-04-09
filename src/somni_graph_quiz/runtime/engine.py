@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from somni_graph_quiz.contracts.question_catalog import get_question
-from somni_graph_quiz.contracts.turn_result import create_turn_result
+from somni_graph_quiz.contracts.turn_result import calculate_progress_percent, create_turn_result
 from somni_graph_quiz.nodes.layer1.turn_classify import TurnClassifyNode
 from somni_graph_quiz.nodes.layer2.content.branch import ContentBranch
 from somni_graph_quiz.nodes.layer2.non_content.branch import NonContentBranch
@@ -46,6 +46,12 @@ class GraphRuntimeEngine:
                 "completion_message": assistant_message,
                 "finalized": True,
             }
+        progress_percent = calculate_progress_percent(
+            answered_question_ids=updated_graph_state["session_memory"].get("answered_question_ids", []),
+            partial_question_ids=updated_graph_state["session_memory"].get("partial_question_ids", []),
+            question_count=len(updated_graph_state["question_catalog"].get("question_order", [])),
+            finalized=finalized.finalized,
+        )
         return create_turn_result(
             updated_graph_state=updated_graph_state,
             answer_record=finalized.updated_answer_record,
@@ -53,6 +59,7 @@ class GraphRuntimeEngine:
             assistant_message=assistant_message,
             finalized=finalized.finalized,
             final_result=final_result,
+            progress_percent=progress_percent,
         )
 
     def _append_recent_turn(

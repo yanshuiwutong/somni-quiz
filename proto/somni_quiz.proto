@@ -84,6 +84,7 @@ message InitQuizRequest {
   repeated BusinessQuestion questionnaire = 3;
   AnswerRecord answer_record = 4;
   string quiz_mode = 5;
+  string default_city = 6;
 }
 
 message InitQuizResponse {
@@ -94,6 +95,7 @@ message InitQuizResponse {
   PendingQuestion pending_question = 5;
   AnswerRecord answer_record = 6;
   string quiz_mode = 7;
+  double progress_percent = 8;
 }
 
 message ChatQuizRequest {
@@ -112,6 +114,7 @@ message ChatQuizResponse {
   google.protobuf.Struct final_result = 7;
   string quiz_mode = 8;
   string answer_status_code = 9;
+  double progress_percent = 10;
 }
 
 service QuizService {

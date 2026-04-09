@@ -16,6 +16,7 @@ def build_runtime_memory_view(graph_state: dict) -> dict:
         "partial_question_ids": list(session_memory["partial_question_ids"]),
         "skipped_question_ids": list(session_memory["skipped_question_ids"]),
         "clarification_context": session_memory["clarification_context"],
+        "pending_weather_query": session_memory.get("pending_weather_query"),
     }
 
 
@@ -43,4 +44,5 @@ def build_llm_memory_view(graph_state: dict) -> dict:
         "partial_summary": list(session_memory["pending_partial_answers"].values()),
         "recent_turn_summaries": list(session_memory["recent_turns"]),
         "clarification_context": session_memory["clarification_context"],
+        "pending_weather_query": session_memory.get("pending_weather_query"),
     }

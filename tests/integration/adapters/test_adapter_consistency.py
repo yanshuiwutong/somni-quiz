@@ -62,3 +62,4 @@ def test_grpc_and_streamlit_share_core_turn_results() -> None:
 
     assert grpc_response.pending_question.question_id == streamlit_view["pending_question"]["question_id"]
     assert grpc_response.answer_record.answers[0].question_id == streamlit_view["answer_record"]["answers"][0]["question_id"]
+    assert grpc_response.progress_percent == streamlit_view["progress_percent"] == 50.0

@@ -22,6 +22,7 @@ def create_graph_state(
     quiz_mode: str,
     question_catalog: dict,
     language_preference: str,
+    default_city: str | None = None,
     started_at: str | None = None,
 ) -> dict:
     """Create the initial graph state."""
@@ -34,6 +35,7 @@ def create_graph_state(
             "quiz_mode": quiz_mode,
             "language_preference": language_preference,
             "language_source": f"{channel}_input",
+            "default_city": "" if default_city is None else str(default_city).strip(),
             "started_at": started_at or datetime.now(UTC).isoformat(),
         },
         "question_catalog": deepcopy(question_catalog),

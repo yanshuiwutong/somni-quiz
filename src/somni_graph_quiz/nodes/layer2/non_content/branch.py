@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 
 from somni_graph_quiz.contracts.node_contracts import create_branch_result
+from somni_graph_quiz.tools import extract_weather_city, looks_like_weather_city_followup
 
 
 class NonContentBranch:
@@ -12,6 +13,8 @@ class NonContentBranch:
 
     def run(self, graph_state: dict, turn_input: object) -> dict:
         non_content_intent = graph_state["turn"].get("non_content_intent", "pullback_chat")
+        if non_content_intent == "weather_query":
+            return self._handle_weather_query(graph_state, turn_input)
         if non_content_intent in {
             "navigate_next",
             "navigate_previous",
@@ -27,6 +30,14 @@ class NonContentBranch:
         if non_content_intent == "identity":
             return create_branch_result(
                 branch_type="non_content",
+                state_patch={
+                    "session_memory": {
+                        "clarification_context": self._build_pullback_context(
+                            graph_state,
+                            kind="identity_question",
+                        )
+                    }
+                },
                 response_facts={
                     "non_content_mode": "pullback",
                     "non_content_action": "pullback",
@@ -35,6 +46,14 @@ class NonContentBranch:
             )
         return create_branch_result(
             branch_type="non_content",
+            state_patch={
+                "session_memory": {
+                    "clarification_context": self._build_pullback_context(
+                        graph_state,
+                        kind="pullback_chat",
+                    )
+                }
+            },
             response_facts={
                 "non_content_mode": "pullback",
                 "non_content_action": "pullback",
@@ -63,6 +82,7 @@ class NonContentBranch:
                     "session_memory": {
                         "current_question_id": target_question_id,
                         "pending_modify_context": {"question_id": target_question_id},
+                        "clarification_context": None,
                     }
                 },
                 response_facts={
@@ -87,7 +107,12 @@ class NonContentBranch:
                 )
             return create_branch_result(
                 branch_type="non_content",
-                state_patch={"session_memory": {"current_question_id": target_question_id}},
+                state_patch={
+                    "session_memory": {
+                        "current_question_id": target_question_id,
+                        "clarification_context": None,
+                    }
+                },
                 response_facts={
                     "non_content_mode": "control",
                     "control_action": "navigate_previous",
@@ -105,6 +130,7 @@ class NonContentBranch:
                         "session_memory": {
                             "current_question_id": current_question_id,
                             "pending_question_ids": pending[1:] or pending,
+                            "clarification_context": None,
                         }
                     },
                     response_facts={
@@ -136,6 +162,7 @@ class NonContentBranch:
                         "pending_partial_answers": deepcopy(session_memory["pending_partial_answers"]),
                         "partial_question_ids": list(session_memory["partial_question_ids"]),
                         "question_states": question_states,
+                        "clarification_context": None,
                     }
                 },
                 skipped_question_ids=[current_question_id] if current_question_id else [],
@@ -165,6 +192,7 @@ class NonContentBranch:
                     "session_memory": {
                         "answered_records": answered,
                         "previous_answer_record": None,
+                        "clarification_context": None,
                     }
                 },
                 response_facts={
@@ -226,6 +254,71 @@ class NonContentBranch:
             response_facts={"non_content_mode": "pullback", "non_content_action": "pullback"},
         )
 
+    def _handle_weather_query(self, graph_state: dict, turn_input: object) -> dict:
+        raw_input = getattr(turn_input, "raw_input", "")
+        explicit_city = extract_weather_city(raw_input)
+        pending_weather_query = graph_state.get("session_memory", {}).get("pending_weather_query") or {}
+        followup_city = ""
+        if (
+            not explicit_city
+            and pending_weather_query.get("waiting_for_city")
+            and looks_like_weather_city_followup(raw_input)
+        ):
+            followup_city = str(raw_input).strip().strip("，,。！？?!：:；;")
+        default_city = str(graph_state.get("session", {}).get("default_city", "") or "").strip()
+        city = explicit_city or followup_city or default_city
+        if not city:
+            return create_branch_result(
+                branch_type="non_content",
+                state_patch={
+                    "session_memory": {
+                        "pending_weather_query": {
+                            "waiting_for_city": True,
+                            "source": "weather_query",
+                        }
+                    }
+                },
+                response_facts={
+                    "non_content_mode": "weather",
+                    "non_content_action": "weather_query",
+                    "weather_status": "missing_city",
+                },
+            )
+        weather_tool = graph_state.get("runtime", {}).get("weather_tool")
+        if weather_tool is None:
+            return create_branch_result(
+                branch_type="non_content",
+                response_facts={
+                    "non_content_mode": "weather",
+                    "non_content_action": "weather_query",
+                    "weather_status": "error",
+                    "weather_city": city,
+                },
+            )
+        result = weather_tool.get_current_weather(city)
+        if result.get("ok") and result.get("summary"):
+            return create_branch_result(
+                branch_type="non_content",
+                state_patch={"session_memory": {"pending_weather_query": None}},
+                response_facts={
+                    "non_content_mode": "weather",
+                    "non_content_action": "weather_query",
+                    "weather_status": "success",
+                    "weather_city": str(result.get("city", city)),
+                    "weather_summary": str(result.get("summary", "")),
+                },
+            )
+        return create_branch_result(
+            branch_type="non_content",
+            state_patch={"session_memory": {"pending_weather_query": None}},
+            response_facts={
+                "non_content_mode": "weather",
+                "non_content_action": "weather_query",
+                "weather_status": "error",
+                "weather_city": str(result.get("city", city)),
+            },
+        )
+
     def _latest_answered_question_id(self, session_memory: dict) -> str | None:
         for turn in reversed(session_memory["recent_turns"]):
             modified_question_ids = turn.get("modified_question_ids", [])
@@ -238,3 +331,14 @@ class NonContentBranch:
         if answered_question_ids:
             return answered_question_ids[-1]
         return None
+
+    def _build_pullback_context(self, graph_state: dict, *, kind: str) -> dict | None:
+        current_question_id = graph_state["session_memory"].get("current_question_id")
+        if not current_question_id:
+            return None
+        question = graph_state["question_catalog"]["question_index"].get(current_question_id, {})
+        return {
+            "question_id": current_question_id,
+            "question_title": question.get("title"),
+            "kind": kind,
+        }

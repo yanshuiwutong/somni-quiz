@@ -38,6 +38,7 @@ class ContentApplyNode:
         partial_ids: list[str] = []
         rejected_unit_ids: list[str] = []
         current_question_id = session_memory["current_question_id"]
+        clarification_context = deepcopy(session_memory["clarification_context"])
         response_facts: dict = {}
 
         duplicate_question_ids = {
@@ -107,6 +108,11 @@ class ContentApplyNode:
                         question_id: pending_partial_answers[question_id]["missing_fields"]
                     }
                     current_question_id = question_id
+                    clarification_context = self._build_clarification_context(
+                        graph_state,
+                        question_id,
+                        "partial_missing_fields",
+                    )
                     continue
                 if action_mode == "modify":
                     previous_answer_record[question_id] = deepcopy(answered_records[question_id])
@@ -167,6 +173,8 @@ class ContentApplyNode:
         pending_modify_context = session_memory["pending_modify_context"]
         if progress_made:
             pending_modify_context = None
+        if applied_question_ids or modified_question_ids:
+            clarification_context = None
 
         return create_branch_result(
             branch_type="content",
@@ -183,6 +191,7 @@ class ContentApplyNode:
                     "question_states": question_states,
                     "previous_answer_record": previous_answer_record or None,
                     "pending_modify_context": pending_modify_context,
+                    "clarification_context": clarification_context,
                 }
             },
             applied_question_ids=applied_question_ids,
@@ -232,6 +241,7 @@ class ContentApplyNode:
                             "current_question_id": next_question_id,
                             "pending_partial_answers": deepcopy(session_memory["pending_partial_answers"]),
                             "partial_question_ids": list(session_memory["partial_question_ids"]),
+                            "clarification_context": None,
                         }
                     },
                     skipped_question_ids=[current_question_id],
@@ -260,6 +270,12 @@ class ContentApplyNode:
                 "session_memory": {
                     "answered_records": deepcopy(session_memory["answered_records"]),
                     "question_states": question_states,
+                    "clarification_context": self._build_clarification_context(
+                        graph_state,
+                        target_question_id,
+                        clarification_kind,
+                        title=clarification_details.get("clarification_question_title"),
+                    ),
                 }
             },
             clarification_needed=True,
@@ -402,3 +418,20 @@ class ContentApplyNode:
             "clarification_question_title",
             title or question.get("title"),
         )
+
+    def _build_clarification_context(
+        self,
+        graph_state: dict,
+        question_id: str | None,
+        clarification_kind: str,
+        *,
+        title: str | None = None,
+    ) -> dict | None:
+        if not question_id:
+            return None
+        question = graph_state["question_catalog"]["question_index"].get(question_id, {})
+        return {
+            "question_id": question_id,
+            "question_title": title or question.get("title"),
+            "kind": clarification_kind,
+        }

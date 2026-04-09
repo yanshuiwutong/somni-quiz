@@ -54,6 +54,11 @@ def test_non_content_branch_marks_thanks_as_pullback(question_catalog: dict) -> 
 
     assert result["applied_question_ids"] == []
     assert result["response_facts"]["non_content_mode"] == "pullback"
+    assert result["state_patch"]["session_memory"]["clarification_context"]["question_id"] == "question-01"
+    assert result["state_patch"]["session_memory"]["clarification_context"]["question_title"] == (
+        graph_state["question_catalog"]["question_index"]["question-01"]["title"]
+    )
+    assert result["state_patch"]["session_memory"]["clarification_context"]["kind"] == "pullback_chat"
 
 
 def test_non_content_skip_keeps_partial_answer(question_catalog: dict) -> None:
@@ -77,6 +82,11 @@ def test_non_content_skip_keeps_partial_answer(question_catalog: dict) -> None:
         "attempt_count": 1,
         "last_action_mode": "answer",
     }
+    graph_state["session_memory"]["clarification_context"] = {
+        "question_id": "question-02",
+        "question_title": "您平时通常的作息？",
+        "kind": "partial_missing_fields",
+    }
 
     graph_state["turn"]["non_content_intent"] = "skip"
 
@@ -94,6 +104,7 @@ def test_non_content_skip_keeps_partial_answer(question_catalog: dict) -> None:
     assert result["state_patch"]["session_memory"]["pending_partial_answers"]["question-02"]["filled_fields"] == {
         "bedtime": "23:00"
     }
+    assert result["state_patch"]["session_memory"]["clarification_context"] is None
 
 
 def test_non_content_undo_restores_previous_answer(question_catalog: dict) -> None:
@@ -321,3 +332,80 @@ def test_non_content_branch_navigate_previous_switches_to_latest_answered(
     assert result["branch_type"] == "non_content"
     assert result["response_facts"]["non_content_action"] == "navigate_previous"
     assert result["state_patch"]["session_memory"]["current_question_id"] == "question-01"
+
+
+def test_non_content_branch_weather_query_uses_default_city_without_changing_question_state(
+    question_catalog: dict,
+) -> None:
+    class _WeatherTool:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def get_current_weather(self, city: str) -> dict:
+            self.calls.append(city)
+            return {
+                "ok": True,
+                "city": city,
+                "summary": "晴，22C",
+            }
+
+    graph_state = create_graph_state(
+        session_id="session-weather",
+        channel="grpc",
+        quiz_mode="dynamic",
+        question_catalog=question_catalog,
+        language_preference="zh-CN",
+        default_city="北京",
+    )
+    graph_state["runtime"]["weather_tool"] = _WeatherTool()
+    graph_state["turn"]["non_content_intent"] = "weather_query"
+
+    result = NonContentBranch().run(
+        graph_state,
+        TurnInput(
+            session_id="session-weather",
+            channel="grpc",
+            input_mode="message",
+            raw_input="今天天气怎么样",
+            language_preference="zh-CN",
+        ),
+    )
+
+    assert result["branch_type"] == "non_content"
+    assert result["applied_question_ids"] == []
+    assert result["response_facts"]["non_content_mode"] == "weather"
+    assert result["response_facts"]["weather_status"] == "success"
+    assert result["response_facts"]["weather_city"] == "北京"
+    assert result["state_patch"]["session_memory"]["pending_weather_query"] is None
+
+
+def test_non_content_branch_weather_query_requests_city_when_no_city_available(
+    question_catalog: dict,
+) -> None:
+    graph_state = create_graph_state(
+        session_id="session-weather-missing-city",
+        channel="grpc",
+        quiz_mode="dynamic",
+        question_catalog=question_catalog,
+        language_preference="zh-CN",
+        default_city="",
+    )
+    graph_state["turn"]["non_content_intent"] = "weather_query"
+
+    result = NonContentBranch().run(
+        graph_state,
+        TurnInput(
+            session_id="session-weather-missing-city",
+            channel="grpc",
+            input_mode="message",
+            raw_input="今天天气怎么样",
+            language_preference="zh-CN",
+        ),
+    )
+
+    assert result["branch_type"] == "non_content"
+    assert result["response_facts"]["weather_status"] == "missing_city"
+    assert result["state_patch"]["session_memory"]["pending_weather_query"] == {
+        "waiting_for_city": True,
+        "source": "weather_query",
+    }

@@ -39,12 +39,15 @@
   - 最近澄清上下文
 - 裸时间表达的证据弱于带动作词的表达。
 - 当前题有软优先，但不能压过明显更强的语义线索。
+- 对 `question-02 / question-03 / question-04` 这组三个时间题：
+  - 若当前题本身就是相关时间题，且当前单元能合法回答当前题，则优先当前题。
+  - 该优先级只作用于当前单元，不阻断同一条输入中的其他单元命中别的题。
+  - 若当前题不能稳定闭环，不要因为它是当前题就强行选择它。
 - partial 与 clarification 上下文可以提高某个候选的优先级。
 - 当没有更多上下文时：
   - 普通作息题优先于自由放松作息题
 - `23点睡` 比 `23点` 更强，因为包含“睡”的动作线索。
 - `7点起` 比纯 `7点` 更强，因为包含“起”的动作线索。
-- 若只是纯时间点且多个候选都合理，不要硬选。
 
 ## Must Not
 
@@ -64,7 +67,7 @@
 输入单元：
 
 - `unit_text`: `23点睡`
-- `candidate_questions`: `["question-02", "question-05", "question-06"]`
+- `candidate_questions`: `["question-02", "question-03"]`
 
 输出：
 
@@ -81,7 +84,7 @@
 输入单元：
 
 - `unit_text`: `23点`
-- `candidate_questions`: `["question-02", "question-05", "question-06"]`
+- `candidate_questions`: `["question-02", "question-03", "question-04"]`
 
 输出：
 

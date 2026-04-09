@@ -6,8 +6,10 @@ from pathlib import Path
 import re
 
 from somni_graph_quiz.llm.invocation import invoke_json
+from somni_graph_quiz.nodes.layer2.content.mapping import map_content_answer
 from somni_graph_quiz.llm.prompt_loader import PromptLoader
 from somni_graph_quiz.runtime.context_builder import build_llm_memory_view
+from somni_graph_quiz.tools import looks_like_weather_city_followup, looks_like_weather_query
 
 
 _PROMPTS_ROOT = Path(__file__).resolve().parents[4] / "prompts"
@@ -29,6 +31,7 @@ class TurnClassifyNode:
         "skip",
         "undo",
         "modify_previous",
+        "weather_query",
         "none",
     }
 
@@ -60,6 +63,48 @@ class TurnClassifyNode:
                 "terminal_signal": None,
                 "fallback_used": False,
             }
+        if self._should_route_to_pending_weather_followup(graph_state, raw_input):
+            normalized_input = raw_input.strip()
+            return {
+                "state_patch": {
+                    "turn": {
+                        "raw_input": raw_input,
+                        "input_mode": input_mode,
+                        "normalized_input": normalized_input,
+                        "main_branch": "non_content",
+                        "non_content_intent": "weather_query",
+                        "response_language": response_language,
+                    }
+                },
+                "branch_decision": {
+                    "main_branch": "non_content",
+                    "non_content_intent": "weather_query",
+                },
+                "artifacts": {},
+                "terminal_signal": None,
+                "fallback_used": False,
+            }
+        if looks_like_weather_query(raw_input):
+            normalized_input = raw_input.strip()
+            return {
+                "state_patch": {
+                    "turn": {
+                        "raw_input": raw_input,
+                        "input_mode": input_mode,
+                        "normalized_input": normalized_input,
+                        "main_branch": "non_content",
+                        "non_content_intent": "weather_query",
+                        "response_language": response_language,
+                    }
+                },
+                "branch_decision": {
+                    "main_branch": "non_content",
+                    "non_content_intent": "weather_query",
+                },
+                "artifacts": {},
+                "terminal_signal": None,
+                "fallback_used": False,
+            }
         llm_output = self._try_llm(graph_state, turn_input, response_language)
         if llm_output is not None:
             normalized_input = str(llm_output.get("normalized_input", raw_input.strip()))
@@ -72,10 +117,13 @@ class TurnClassifyNode:
             if (
                 main_branch == "non_content"
                 and non_content_intent == "pullback_chat"
-                and self._looks_like_catalog_answer(graph_state["question_catalog"], normalized_input)
             ):
-                main_branch = "content"
-                non_content_intent = "none"
+                if self._looks_like_answer_to_pullback_target(graph_state, raw_input):
+                    main_branch = "content"
+                    non_content_intent = "none"
+                elif self._looks_like_catalog_answer(graph_state["question_catalog"], normalized_input):
+                    main_branch = "content"
+                    non_content_intent = "none"
             return {
                 "state_patch": {
                     "turn": {
@@ -187,6 +235,8 @@ class TurnClassifyNode:
             return "non_content", "view_all"
         if "你是谁" in normalized_input:
             return "non_content", "identity"
+        if looks_like_weather_query(normalized_input):
+            return "non_content", "weather_query"
         if any(keyword in lowered for keyword in ("你好", "谢谢", "哈哈", "thank", "hi", "hello")):
             return "non_content", "pullback_chat"
         return "content", "none"
@@ -204,6 +254,60 @@ class TurnClassifyNode:
             return candidate
         _, fallback_intent = self._classify(normalized_input)
         return fallback_intent if fallback_intent != "none" else "pullback_chat"
+
+    def _should_route_to_pending_weather_followup(self, graph_state: dict, raw_input: str) -> bool:
+        pending_weather_query = graph_state.get("session_memory", {}).get("pending_weather_query") or {}
+        if not pending_weather_query.get("waiting_for_city"):
+            return False
+        candidate_text = str(raw_input).strip()
+        if not looks_like_weather_city_followup(candidate_text):
+            return False
+        normalized_input = candidate_text.strip()
+        fallback_branch, fallback_intent = self._classify(normalized_input)
+        if fallback_branch == "non_content" and fallback_intent != "none":
+            return False
+        current_question_id = graph_state.get("session_memory", {}).get("current_question_id")
+        current_question = graph_state.get("question_catalog", {}).get("question_index", {}).get(current_question_id)
+        if (
+            current_question
+            and str(current_question.get("input_type", "")).lower() != "text"
+            and self._looks_like_answer_to_question(current_question, candidate_text)
+        ):
+            return False
+        return True
+
+    def _looks_like_answer_to_pullback_target(self, graph_state: dict, raw_input: str) -> bool:
+        question_catalog = graph_state["question_catalog"]
+        question_index = question_catalog.get("question_index", {})
+        candidate_text = str(raw_input).strip()
+        if not candidate_text:
+            return False
+        for question_id in self._pullback_target_question_ids(graph_state.get("session_memory", {})):
+            question = question_index.get(question_id)
+            if question and self._looks_like_answer_to_question(question, candidate_text):
+                return True
+        return False
+
+    def _pullback_target_question_ids(self, session_memory: dict) -> list[str]:
+        target_ids: list[str] = []
+        clarification_context = session_memory.get("clarification_context") or {}
+        clarification_question_id = str(clarification_context.get("question_id") or "")
+        current_question_id = str(session_memory.get("current_question_id") or "")
+        for question_id in (clarification_question_id, current_question_id):
+            if question_id and question_id not in target_ids:
+                target_ids.append(question_id)
+        return target_ids
+
+    def _looks_like_answer_to_question(self, question: dict, normalized_input: str) -> bool:
+        mapped = map_content_answer(question, normalized_input, raw_text=normalized_input)
+        if mapped.get("selected_options"):
+            return True
+        if mapped.get("field_updates"):
+            return True
+        input_type = str(question.get("input_type", "")).lower()
+        if input_type == "text" and not question.get("options"):
+            return bool(str(mapped.get("input_value", "")).strip())
+        return False
 
     def _looks_like_catalog_answer(self, question_catalog: dict, normalized_input: str) -> bool:
         normalized_text = self._normalize_for_overlap(normalized_input)
