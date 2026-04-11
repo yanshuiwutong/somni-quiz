@@ -12,6 +12,10 @@ _TIME_TOKEN_PATTERN = re.compile(
     r"(?:[:：](?P<minute>\d{1,2}))?\s*(?:点|时)?\s*(?:左右)?"
 )
 _AGE_PATTERN = re.compile(r"\d{1,3}")
+_ORDINAL_SELECTOR_PATTERN = re.compile(
+    r"第\s*(?P<ordinal>\d{1,2}|十[一二三四五六七八九]?|[一二两三四五六七八九十])\s*(?:个|项|条|种)?"
+)
+_OPTION_ID_SELECTOR_TEMPLATE = r"(?:我选|选|就选|选择|答案是|答|是|就)\s*{option_id}(?:选项|项|个)?"
 
 _TEN_MINUTE_TOKENS = (
     "十来分钟",
@@ -20,6 +24,56 @@ _TEN_MINUTE_TOKENS = (
     "10分钟",
     "10来分钟",
 )
+_SINGLE_CHOICE_INPUT_TYPES = {"radio", "single", "select", "time_point"}
+_SELECTOR_TEXT_STRIP_PATTERN = re.compile(r"[\s,，。；;：:、.!?？“”\"'`~\-_/()（）]+")
+_SEMANTIC_TEXT_PATTERN = re.compile(r"[A-Za-z0-9]+|[\u4e00-\u9fff]+")
+_CHINESE_ORDINAL_MAP = {
+    "一": 1,
+    "二": 2,
+    "两": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+    "十": 10,
+}
+_NON_ANSWER_TOKENS = (
+    "你好",
+    "您好",
+    "哈哈",
+    "哈哈哈",
+    "hi",
+    "hello",
+    "hey",
+    "thanks",
+    "thankyou",
+    "谢谢",
+    "上一题",
+    "下一题",
+    "跳过",
+    "查看记录",
+    "看记录",
+    "重新开始",
+    "重来",
+)
+_SEMANTIC_STOP_TOKENS = {
+    "什么",
+    "怎么",
+    "怎样",
+    "多久",
+    "一般",
+    "完全",
+    "需要",
+    "情况",
+    "时候",
+    "早上",
+    "晚上",
+    "安排",
+    "影响",
+}
 
 
 def map_content_value(question_id: str, raw_value: object) -> dict:
@@ -71,7 +125,14 @@ def map_content_value(question_id: str, raw_value: object) -> dict:
     return {"selected_options": [], "input_value": raw_text}
 
 
-def map_content_answer(question: dict, raw_value: object, *, raw_text: str = "") -> dict:
+def map_content_answer(
+    question: dict,
+    raw_value: object,
+    *,
+    raw_text: str = "",
+    allow_explicit_selectors: bool = True,
+    allow_custom_empty_option_fallback: bool = False,
+) -> dict:
     """Map an extracted content value into a normalized answer payload."""
     if isinstance(raw_value, dict):
         selected_options = list(raw_value.get("selected_options", []))
@@ -93,6 +154,16 @@ def map_content_answer(question: dict, raw_value: object, *, raw_text: str = "")
             }
 
     question_id = str(question.get("question_id", ""))
+    selector_text = raw_text or str(raw_value)
+    if allow_explicit_selectors:
+        explicit_option_id = extract_explicit_option_selector(question, selector_text)
+        if explicit_option_id is not None:
+            return {
+                "selected_options": [explicit_option_id],
+                "input_value": "",
+                "field_updates": {},
+                "missing_fields": [],
+            }
     mapped = map_content_value(question_id, raw_value)
     selected_options = list(mapped.get("selected_options", []))
     field_updates = dict(mapped.get("filled_fields", {}))
@@ -109,12 +180,63 @@ def map_content_answer(question: dict, raw_value: object, *, raw_text: str = "")
     generic = _map_generic_question_options(question, raw_text or str(raw_value))
     if generic["selected_options"]:
         return generic
+    if allow_custom_empty_option_fallback:
+        custom_fallback = _map_empty_option_custom_fallback(question, raw_text or str(raw_value))
+        if custom_fallback is not None:
+            return custom_fallback
     return {
         "selected_options": [],
         "input_value": raw_text or str(raw_value).strip(),
         "field_updates": {},
         "missing_fields": [],
     }
+
+
+def map_empty_option_custom_fallback(question: dict | None, raw_text: str) -> dict | None:
+    if not isinstance(question, dict):
+        return None
+    return _map_empty_option_custom_fallback(question, raw_text)
+
+
+def should_prefer_empty_option_custom_fallback(question: dict | None, raw_text: str) -> bool:
+    if not isinstance(question, dict):
+        return False
+    stripped_text = raw_text.strip()
+    if not stripped_text:
+        return False
+    if extract_explicit_option_selector(question, stripped_text) is not None:
+        return False
+    fallback = _map_empty_option_custom_fallback(question, stripped_text)
+    if fallback is None:
+        return False
+    return not _looks_like_clear_non_empty_option_match(question, stripped_text)
+
+
+def extract_explicit_option_selector(question: dict | None, raw_text: str) -> str | None:
+    if not _is_single_choice_question(question):
+        return None
+
+    options = list((question or {}).get("options", []))
+    if not options:
+        return None
+
+    normalized_raw_text = _normalize_selector_text(raw_text)
+    if not normalized_raw_text:
+        return None
+
+    ordinal_index = _extract_ordinal_selector_index(raw_text)
+    if ordinal_index is not None and 0 <= ordinal_index < len(options):
+        option_id = str(options[ordinal_index].get("option_id", "")).strip()
+        if option_id:
+            return option_id
+
+    for option in options:
+        option_id = str(option.get("option_id", "")).strip()
+        if not option_id:
+            continue
+        if _matches_option_id_selector(raw_text, normalized_raw_text, option_id):
+            return option_id
+    return None
 
 
 def _map_free_sleep_option(raw_text: str) -> str | None:
@@ -181,8 +303,7 @@ def _map_age_option(raw_text: str) -> str | None:
 
 
 def _map_generic_question_options(question: dict, raw_text: str) -> dict:
-    input_type = str(question.get("input_type", "")).lower()
-    if input_type not in {"radio", "single", "select", "time_point"}:
+    if not _is_single_choice_question(question):
         return {
             "selected_options": [],
             "input_value": raw_text.strip(),
@@ -283,5 +404,196 @@ def _score_sensitivity_scale(
     return 0
 
 
+def _is_single_choice_question(question: dict | None) -> bool:
+    if not isinstance(question, dict):
+        return False
+    input_type = str(question.get("input_type", "")).lower()
+    if input_type in _SINGLE_CHOICE_INPUT_TYPES:
+        return True
+    metadata = question.get("metadata", {})
+    structured_kind = str(metadata.get("structured_kind", "")).lower()
+    return structured_kind in {"radio", "single", "select", "single_choice"}
+
+
+def _extract_ordinal_selector_index(raw_text: str) -> int | None:
+    match = _ORDINAL_SELECTOR_PATTERN.search(raw_text)
+    if not match:
+        return None
+    ordinal_token = match.group("ordinal")
+    ordinal_value = _parse_ordinal_token(ordinal_token)
+    if ordinal_value is None or ordinal_value <= 0:
+        return None
+    return ordinal_value - 1
+
+
+def _parse_ordinal_token(token: str) -> int | None:
+    stripped = token.strip()
+    if not stripped:
+        return None
+    if stripped.isdigit():
+        return int(stripped)
+    if stripped == "十":
+        return 10
+    if stripped.startswith("十") and len(stripped) == 2:
+        return 10 + _CHINESE_ORDINAL_MAP.get(stripped[1], 0)
+    return _CHINESE_ORDINAL_MAP.get(stripped)
+
+
+def _matches_option_id_selector(raw_text: str, normalized_raw_text: str, option_id: str) -> bool:
+    normalized_option_id = _normalize_selector_text(option_id).upper()
+    if not normalized_option_id:
+        return False
+    if normalized_raw_text.upper() == normalized_option_id:
+        return True
+
+    raw_text_upper = raw_text.upper()
+    selector_pattern = re.compile(
+        _OPTION_ID_SELECTOR_TEMPLATE.format(option_id=re.escape(normalized_option_id))
+    )
+    return bool(selector_pattern.search(raw_text_upper))
+
+
+def _normalize_selector_text(value: str) -> str:
+    return _SELECTOR_TEXT_STRIP_PATTERN.sub("", value).strip()
+
+
 def _normalize_text(value: str) -> str:
     return re.sub(r"[\s,，。；;：:、.!?？“”\"'`~\-_/]+", "", value).lower()
+
+
+def _map_empty_option_custom_fallback(question: dict, raw_text: str) -> dict | None:
+    fallback_option_id = _empty_option_fallback_id(question)
+    stripped_text = raw_text.strip()
+    if fallback_option_id is None or not stripped_text:
+        return None
+    if _looks_like_non_answer_text(stripped_text):
+        return None
+    if not _looks_related_to_question(question, stripped_text):
+        return None
+    return {
+        "selected_options": [fallback_option_id],
+        "input_value": stripped_text,
+        "field_updates": {},
+        "missing_fields": [],
+    }
+
+
+def _empty_option_fallback_id(question: dict | None) -> str | None:
+    if not isinstance(question, dict):
+        return None
+    if str(question.get("input_type", "")).lower() != "radio":
+        return None
+    fallback_option_ids = []
+    for option in question.get("options", []):
+        option_id = str(option.get("option_id", "")).strip()
+        if not option_id:
+            continue
+        option_text = str(option.get("option_text", option.get("label", ""))).strip()
+        label = str(option.get("label", option.get("option_text", ""))).strip()
+        if not option_text and not label:
+            fallback_option_ids.append(option_id)
+    if len(fallback_option_ids) != 1:
+        return None
+    return fallback_option_ids[0]
+
+
+def _looks_like_non_answer_text(raw_text: str) -> bool:
+    normalized_input = _normalize_text(raw_text)
+    if not normalized_input:
+        return True
+    return any(token in normalized_input for token in _NON_ANSWER_TOKENS)
+
+
+def _looks_related_to_question(question: dict, raw_text: str) -> bool:
+    input_tokens = _semantic_tokens(raw_text)
+    if not input_tokens:
+        return False
+    question_tokens = _question_semantic_tokens(question)
+    if not question_tokens:
+        return False
+    return bool(input_tokens & question_tokens)
+
+
+def _question_semantic_tokens(question: dict) -> set[str]:
+    tokens: set[str] = set()
+    for value in (
+        question.get("title", ""),
+        *question.get("metadata", {}).get("matching_hints", []),
+    ):
+        tokens.update(_semantic_tokens(str(value)))
+    for option in question.get("options", []):
+        for value in (
+            option.get("label", ""),
+            option.get("option_text", ""),
+            *option.get("aliases", []),
+        ):
+            tokens.update(_semantic_tokens(str(value)))
+    return tokens
+
+
+def _looks_like_clear_non_empty_option_match(question: dict, raw_text: str) -> bool:
+    normalized_input = _normalize_text(raw_text)
+    if not normalized_input:
+        return False
+    input_tokens = _semantic_tokens(raw_text)
+    question_context_tokens = _semantic_tokens(str(question.get("title", "")))
+    for hint in question.get("metadata", {}).get("matching_hints", []):
+        question_context_tokens.update(_semantic_tokens(str(hint)))
+
+    for option in question.get("options", []):
+        option_text = str(option.get("option_text", option.get("label", ""))).strip()
+        label = str(option.get("label", option.get("option_text", ""))).strip()
+        if not option_text and not label:
+            continue
+
+        variants = []
+        for value in (label, option_text, *option.get("aliases", [])):
+            variant = str(value).strip()
+            if variant and variant not in variants:
+                variants.append(variant)
+        for variant in variants:
+            normalized_variant = _normalize_text(variant)
+            if not normalized_variant:
+                continue
+            if normalized_input == normalized_variant:
+                return True
+            if normalized_variant in normalized_input:
+                return True
+            if normalized_input in normalized_variant and len(normalized_input) >= 4:
+                return True
+
+        specific_tokens = _option_semantic_tokens(option) - question_context_tokens
+        if input_tokens & specific_tokens:
+            return True
+    return False
+
+
+def _option_semantic_tokens(option: dict) -> set[str]:
+    tokens: set[str] = set()
+    for value in (
+        option.get("label", ""),
+        option.get("option_text", ""),
+        *option.get("aliases", []),
+    ):
+        tokens.update(_semantic_tokens(str(value)))
+    return tokens
+
+
+def _semantic_tokens(value: str) -> set[str]:
+    tokens: set[str] = set()
+    for match in _SEMANTIC_TEXT_PATTERN.finditer(value):
+        chunk = match.group(0).strip().lower()
+        if not chunk:
+            continue
+        if chunk.isascii():
+            if len(chunk) >= 2 and chunk not in _SEMANTIC_STOP_TOKENS:
+                tokens.add(chunk)
+            continue
+        if len(chunk) == 1:
+            continue
+        for size in range(2, min(4, len(chunk)) + 1):
+            for start in range(0, len(chunk) - size + 1):
+                token = chunk[start:start + size]
+                if token not in _SEMANTIC_STOP_TOKENS:
+                    tokens.add(token)
+    return tokens

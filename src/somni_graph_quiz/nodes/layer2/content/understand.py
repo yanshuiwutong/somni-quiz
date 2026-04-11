@@ -9,7 +9,12 @@ from pathlib import Path
 
 from somni_graph_quiz.llm.invocation import invoke_json
 from somni_graph_quiz.llm.prompt_loader import PromptLoader
-from somni_graph_quiz.nodes.layer2.content.mapping import map_content_answer
+from somni_graph_quiz.nodes.layer2.content.mapping import (
+    extract_explicit_option_selector,
+    map_content_answer,
+    map_empty_option_custom_fallback,
+    should_prefer_empty_option_custom_fallback,
+)
 from somni_graph_quiz.utils.time_parse import parse_schedule_fragment
 
 
@@ -25,6 +30,16 @@ _TIME_EXPRESSION_PATTERN = re.compile(
 )
 _RELAXED_CONTEXT_TOKENS = ("自由", "自然", "周末", "休息日", "完全自由安排")
 _WAKE_AFTER_TIME_PATTERN = re.compile(r"(?:点|时)\s*起")
+_SELECTOR_ONLY_ORDINAL_PATTERN = re.compile(
+    r"第\s*(?:\d+|十[一二三四五六七八九]?|[一二两三四五六七八九十])\s*(?:个|项)?",
+    re.IGNORECASE,
+)
+_SELECTOR_ONLY_LETTER_PATTERN = re.compile(r"(?<![A-Za-z0-9])(?:[A-Za-z])(?![A-Za-z0-9])")
+_SELECTOR_ONLY_FILLER_PATTERN = re.compile(
+    r"(?:我要|我想|我就|那我|那就|就是|我|选项|选|选择|答案|是的|是|嗯|哦|好|好的|吧|呀|啊|呢|嘛|这个|那个)",
+    re.IGNORECASE,
+)
+_SELECTOR_ONLY_PUNCTUATION_PATTERN = re.compile(r"[\s,，。！？!?.、~`'\"“”‘’：:；;（）()【】\[\]<>《》\-]+")
 
 
 class ContentUnderstandNode:
@@ -46,12 +61,66 @@ class ContentUnderstandNode:
         if direct_answer_payload and direct_answer_payload.get("question_id"):
             return self._rule_understand(graph_state, turn_input, raw_input)
 
+        session_memory = graph_state["session_memory"]
+        if self._is_selector_only_input(raw_input):
+            scoped_selector_unit = self._extract_scoped_single_choice_selector_unit(
+                graph_state,
+                session_memory,
+                raw_input,
+            )
+            if scoped_selector_unit is not None:
+                understood = self._standardize_understood(
+                    graph_state,
+                    {
+                        "content_units": [scoped_selector_unit],
+                        "clarification_needed": False,
+                        "clarification_reason": None,
+                    },
+                )
+                understood["content_units"] = self._resolve_single_choice_units(
+                    graph_state,
+                    understood.get("content_units", []),
+                )
+                self._log_diagnostic(
+                    "selector_only_scope_applied",
+                    raw_input=raw_input,
+                    content_units=self._summarize_units(understood.get("content_units", [])),
+                )
+                return understood
+            return {
+                "content_units": [],
+                "clarification_needed": True,
+                "clarification_reason": "current_question_mismatch",
+                "clarification_question_id": session_memory.get("current_question_id"),
+                "clarification_question_title": (
+                    graph_state["question_catalog"]["question_index"][
+                        session_memory["current_question_id"]
+                    ].get("title")
+                    if session_memory.get("current_question_id")
+                    else None
+                ),
+                "clarification_kind": "current_question_mismatch",
+            }
+
         llm_output, llm_attempt = self._try_llm(graph_state, turn_input)
         if llm_output is not None:
             understood = self._standardize_understood(graph_state, llm_output)
             understood["content_units"] = self._resolve_single_choice_units(
                 graph_state,
                 understood.get("content_units", []),
+            )
+            understood = self._apply_current_single_choice_custom_fallback(
+                graph_state,
+                session_memory,
+                raw_input,
+                understood,
+                source="llm",
+            )
+            understood = self._override_current_single_choice_custom_option_misfires(
+                graph_state,
+                session_memory,
+                understood,
+                source="llm",
             )
             self._log_diagnostic(
                 "llm_result_consumed",
@@ -116,6 +185,9 @@ class ContentUnderstandNode:
                 question,
                 normalized.get("raw_extracted_value", normalized.get("unit_text", "")),
                 raw_text=normalized.get("unit_text", ""),
+                allow_custom_empty_option_fallback=(
+                    question_id == graph_state["session_memory"].get("current_question_id")
+                ),
             )
         if (
             not mapped.get("selected_options")
@@ -150,6 +222,140 @@ class ContentUnderstandNode:
             "field_updates": field_updates,
             "missing_fields": missing_fields,
         }
+
+    def _apply_current_single_choice_custom_fallback(
+        self,
+        graph_state: dict,
+        session_memory: dict,
+        raw_input: str,
+        understood: dict,
+        *,
+        source: str,
+    ) -> dict:
+        if not self._should_try_current_single_choice_custom_fallback(graph_state, understood):
+            return understood
+        fallback_unit = self._extract_current_single_choice_custom_fallback_unit(
+            graph_state,
+            session_memory,
+            raw_input,
+        )
+        if fallback_unit is None:
+            return understood
+        fallback_understood = self._standardize_understood(
+            graph_state,
+            {
+                "content_units": [fallback_unit],
+                "clarification_needed": False,
+                "clarification_reason": None,
+            },
+        )
+        fallback_understood["content_units"] = self._resolve_single_choice_units(
+            graph_state,
+            fallback_understood.get("content_units", []),
+        )
+        self._log_diagnostic(
+            "current_single_choice_custom_fallback_applied",
+            raw_input=raw_input,
+            source=source,
+            prior_content_units=self._summarize_units(understood.get("content_units", [])),
+            prior_clarification_needed=bool(understood.get("clarification_needed", False)),
+            content_units=self._summarize_units(fallback_understood.get("content_units", [])),
+        )
+        return fallback_understood
+
+    def _override_current_single_choice_custom_option_misfires(
+        self,
+        graph_state: dict,
+        session_memory: dict,
+        understood: dict,
+        *,
+        source: str,
+    ) -> dict:
+        current_question_id = str(session_memory.get("current_question_id") or "")
+        if not current_question_id:
+            return understood
+        question = graph_state["question_catalog"]["question_index"].get(current_question_id)
+        if not self._is_single_choice_question(question):
+            return understood
+        content_units = understood.get("content_units", [])
+        if not isinstance(content_units, list) or not content_units:
+            return understood
+
+        corrected_units: list[dict] = []
+        applied = False
+        for unit in content_units:
+            if not isinstance(unit, dict):
+                corrected_units.append(unit)
+                continue
+            unit_question_id = str(unit.get("winner_question_id") or "")
+            unit_text = str(unit.get("unit_text", "")).strip()
+            selected_options = list(unit.get("selected_options", []))
+            if (
+                unit_question_id != current_question_id
+                or not selected_options
+                or not unit_text
+                or not should_prefer_empty_option_custom_fallback(question, unit_text)
+            ):
+                corrected_units.append(unit)
+                continue
+            fallback = map_empty_option_custom_fallback(question, unit_text)
+            if fallback is None:
+                corrected_units.append(unit)
+                continue
+            corrected_units.append(
+                {
+                    **unit,
+                    "selected_options": list(fallback.get("selected_options", [])),
+                    "input_value": str(fallback.get("input_value", "")),
+                    "field_updates": {},
+                    "missing_fields": [],
+                }
+            )
+            applied = True
+
+        if not applied:
+            return understood
+        corrected_understood = {
+            **understood,
+            "content_units": corrected_units,
+        }
+        self._log_diagnostic(
+            "current_single_choice_custom_option_misfire_overridden",
+            source=source,
+            prior_content_units=self._summarize_units(content_units),
+            content_units=self._summarize_units(corrected_units),
+        )
+        return corrected_understood
+
+    def _should_try_current_single_choice_custom_fallback(
+        self,
+        graph_state: dict,
+        understood: dict,
+    ) -> bool:
+        current_question_id = str(graph_state["session_memory"].get("current_question_id") or "")
+        if not current_question_id:
+            return False
+        question = graph_state["question_catalog"]["question_index"].get(current_question_id)
+        if not self._is_single_choice_question(question):
+            return False
+        if bool(understood.get("clarification_needed", False)):
+            return True
+        content_units = understood.get("content_units", [])
+        if not isinstance(content_units, list) or not content_units:
+            return True
+        return any(
+            str(unit.get("winner_question_id") or "") == current_question_id
+            and not self._content_unit_has_answer_signal(unit)
+            for unit in content_units
+            if isinstance(unit, dict)
+        )
+
+    def _content_unit_has_answer_signal(self, unit: dict) -> bool:
+        return bool(
+            list(unit.get("selected_options", []))
+            or dict(unit.get("field_updates", {}))
+            or list(unit.get("missing_fields", []))
+        )
 
     def _normalize_action_mode_for_state(self, graph_state: dict, unit: dict) -> dict:
         question_id = str(unit.get("winner_question_id") or "")
@@ -513,6 +719,30 @@ class ContentUnderstandNode:
                 "clarification_reason": None,
             }
 
+        current_selector_unit = self._extract_current_single_choice_selector_unit(
+            graph_state,
+            session_memory,
+            raw_input,
+        )
+        if current_selector_unit is not None:
+            return {
+                "content_units": [current_selector_unit],
+                "clarification_needed": False,
+                "clarification_reason": None,
+            }
+
+        current_custom_fallback_unit = self._extract_current_single_choice_custom_fallback_unit(
+            graph_state,
+            session_memory,
+            raw_input,
+        )
+        if current_custom_fallback_unit is not None:
+            return {
+                "content_units": [current_custom_fallback_unit],
+                "clarification_needed": False,
+                "clarification_reason": None,
+            }
+
         generic_candidates = self._extract_generic_question_candidates(graph_state, raw_input)
         if generic_candidates:
             if len(generic_candidates) == 1:
@@ -753,10 +983,141 @@ class ContentUnderstandNode:
             question = question_catalog["question_index"][question_id]
             if has_time_expression and self._looks_like_age_question(question):
                 continue
-            mapped = map_content_answer(question, raw_input, raw_text=raw_input)
+            mapped = map_content_answer(
+                question,
+                raw_input,
+                raw_text=raw_input,
+                allow_explicit_selectors=False,
+            )
             if self._has_answer_signal(question, mapped):
                 candidates.append(question_id)
         return candidates
+
+    def _extract_current_single_choice_selector_unit(
+        self,
+        graph_state: dict,
+        session_memory: dict,
+        raw_input: str,
+    ) -> dict | None:
+        current_question_id = str(session_memory.get("current_question_id") or "")
+        if not current_question_id:
+            return None
+        question = graph_state["question_catalog"]["question_index"].get(current_question_id)
+        selected_option_id = extract_explicit_option_selector(question, raw_input)
+        if selected_option_id is None:
+            return None
+        return {
+            "unit_id": "unit-1",
+            "unit_text": raw_input,
+            "action_mode": self._action_mode(session_memory, current_question_id),
+            "candidate_question_ids": [current_question_id],
+            "winner_question_id": current_question_id,
+            "needs_attribution": False,
+            "raw_extracted_value": {
+                "selected_options": [selected_option_id],
+                "input_value": "",
+            },
+            "selected_options": [selected_option_id],
+            "input_value": "",
+            "field_updates": {},
+            "missing_fields": [],
+        }
+
+    def _extract_scoped_single_choice_selector_unit(
+        self,
+        graph_state: dict,
+        session_memory: dict,
+        raw_input: str,
+    ) -> dict | None:
+        current_selector_unit = self._extract_current_single_choice_selector_unit(
+            graph_state,
+            session_memory,
+            raw_input,
+        )
+        if current_selector_unit is not None:
+            return current_selector_unit
+        return self._extract_modify_target_single_choice_selector_unit(
+            graph_state,
+            session_memory,
+            raw_input,
+        )
+
+    def _extract_modify_target_single_choice_selector_unit(
+        self,
+        graph_state: dict,
+        session_memory: dict,
+        raw_input: str,
+    ) -> dict | None:
+        modify_target = str((session_memory.get("pending_modify_context") or {}).get("question_id") or "")
+        current_question_id = str(session_memory.get("current_question_id") or "")
+        if not modify_target or modify_target == current_question_id:
+            return None
+        question = graph_state["question_catalog"]["question_index"].get(modify_target)
+        selected_option_id = extract_explicit_option_selector(question, raw_input)
+        if selected_option_id is None:
+            return None
+        return {
+            "unit_id": "unit-1",
+            "unit_text": raw_input,
+            "action_mode": self._action_mode(session_memory, modify_target),
+            "candidate_question_ids": [modify_target],
+            "winner_question_id": modify_target,
+            "needs_attribution": False,
+            "raw_extracted_value": {
+                "selected_options": [selected_option_id],
+                "input_value": "",
+            },
+            "selected_options": [selected_option_id],
+            "input_value": "",
+            "field_updates": {},
+            "missing_fields": [],
+        }
+
+    def _is_selector_only_input(self, raw_input: str) -> bool:
+        if not raw_input:
+            return False
+        if not (
+            _SELECTOR_ONLY_ORDINAL_PATTERN.search(raw_input)
+            or _SELECTOR_ONLY_LETTER_PATTERN.search(raw_input)
+        ):
+            return False
+        remainder = _SELECTOR_ONLY_ORDINAL_PATTERN.sub(" ", raw_input)
+        remainder = _SELECTOR_ONLY_LETTER_PATTERN.sub(" ", remainder)
+        remainder = _SELECTOR_ONLY_FILLER_PATTERN.sub(" ", remainder)
+        remainder = _SELECTOR_ONLY_PUNCTUATION_PATTERN.sub("", remainder)
+        return not remainder
+
+    def _extract_current_single_choice_custom_fallback_unit(
+        self,
+        graph_state: dict,
+        session_memory: dict,
+        raw_input: str,
+    ) -> dict | None:
+        current_question_id = str(session_memory.get("current_question_id") or "")
+        if not current_question_id:
+            return None
+        question = graph_state["question_catalog"]["question_index"].get(current_question_id)
+        if not should_prefer_empty_option_custom_fallback(question, raw_input):
+            return None
+        mapped = map_empty_option_custom_fallback(question, raw_input)
+        if mapped is None or mapped.get("input_value", "").strip() != raw_input.strip():
+            return None
+        return {
+            "unit_id": "unit-1",
+            "unit_text": raw_input,
+            "action_mode": self._action_mode(session_memory, current_question_id),
+            "candidate_question_ids": [current_question_id],
+            "winner_question_id": current_question_id,
+            "needs_attribution": False,
+            "raw_extracted_value": {
+                "selected_options": list(mapped.get("selected_options", [])),
+                "input_value": str(mapped.get("input_value", "")),
+            },
+            "selected_options": list(mapped.get("selected_options", [])),
+            "input_value": str(mapped.get("input_value", "")),
+            "field_updates": {},
+            "missing_fields": [],
+        }
 
     def _has_answer_signal(self, question: dict, mapped: dict) -> bool:
         if mapped.get("selected_options"):
@@ -1010,10 +1371,24 @@ class ContentUnderstandNode:
                 **existing_selection,
             }
 
+        current_question_id = str(graph_state["session_memory"].get("current_question_id") or "")
+        winner_question_id = str(unit.get("winner_question_id") or "")
+        candidate_question_ids = [
+            str(candidate_question_id)
+            for candidate_question_id in unit.get("candidate_question_ids", [])
+            if str(candidate_question_id)
+        ]
         mapped = map_content_answer(
             question,
             unit.get("raw_extracted_value", unit.get("unit_text", "")),
             raw_text=unit.get("unit_text", ""),
+            allow_custom_empty_option_fallback=(
+                question_id == current_question_id
+                and (
+                    winner_question_id == question_id
+                    or candidate_question_ids == [question_id]
+                )
+            ),
         )
         normalized_mapped = self._normalize_single_choice_mapping(question, mapped)
         if normalized_mapped is not None:
@@ -1131,10 +1506,30 @@ class ContentUnderstandNode:
             return None
         return {
             "selected_options": deduped_options,
-            "input_value": "",
+            "input_value": self._custom_fallback_input_value(question, raw_text, deduped_options),
             "field_updates": {},
             "missing_fields": [],
         }
+
+    def _custom_fallback_input_value(
+        self,
+        question: dict,
+        raw_text: str,
+        selected_options: list[str],
+    ) -> str:
+        if len(selected_options) != 1:
+            return ""
+        selected_option_id = selected_options[0]
+        for option in question.get("options", []):
+            option_id = str(option.get("option_id", "")).strip()
+            if option_id != selected_option_id:
+                continue
+            option_text = str(option.get("option_text", option.get("label", ""))).strip()
+            label = str(option.get("label", option.get("option_text", ""))).strip()
+            if not option_text and not label:
+                return raw_text.strip()
+            return ""
+        return ""
 
     def _log_diagnostic(self, event: str, **fields: object) -> None:
         payload = {

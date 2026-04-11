@@ -9,3 +9,5 @@ __pycache__/
 *.pyd
 *.egg-info/
 %F%
+\!TMPPY!
+scripts/_ssh_auth_probe_tmp.py
