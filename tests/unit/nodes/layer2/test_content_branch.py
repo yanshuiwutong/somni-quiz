@@ -847,6 +847,88 @@ def test_content_understand_keeps_llm_free_wake_winner_in_current_question_conte
     assert understood["content_units"][0]["field_updates"] == {}
 
 
+def test_content_understand_reassigns_llm_regular_partial_to_current_free_sleep_question(
+    question_catalog: dict,
+) -> None:
+    graph_state = create_graph_state(
+        session_id="session-llm-current-free-sleep-priority",
+        channel="grpc",
+        quiz_mode="dynamic",
+        question_catalog=question_catalog,
+        language_preference="zh-CN",
+    )
+    graph_state["session_memory"]["current_question_id"] = "question-03"
+    graph_state["session_memory"]["pending_question_ids"] = ["question-03", "question-04"]
+    graph_state["session_memory"]["pending_partial_answers"]["question-02"] = {
+        "question_id": "question-02",
+        "filled_fields": {"wake_time": "11:00"},
+        "missing_fields": ["bedtime"],
+        "source_question_state": "partial",
+    }
+    graph_state["session_memory"]["partial_question_ids"] = ["question-02"]
+    graph_state["session_memory"]["question_states"]["question-02"] = {
+        "status": "partial",
+        "attempt_count": 0,
+        "last_action_mode": "partial_completion",
+    }
+    graph_state["runtime"]["llm_provider"] = FakeLLMProvider(
+        responses={
+            "layer2/content_understand.md": """
+            {
+              "content_units": [
+                {
+                  "unit_id": "unit-1",
+                  "unit_text": "23点睡",
+                  "action_mode": "answer",
+                  "candidate_question_ids": ["question-02"],
+                  "winner_question_id": "question-02",
+                  "needs_attribution": false,
+                  "raw_extracted_value": {
+                    "bedtime": "23:00"
+                  },
+                  "selected_options": [],
+                  "input_value": "",
+                  "field_updates": {
+                    "bedtime": "23:00"
+                  },
+                  "missing_fields": ["wake_time"]
+                }
+              ],
+              "clarification_needed": false,
+              "clarification_reason": null
+            }
+            """
+        }
+    )
+
+    understood = ContentUnderstandNode().run(
+        graph_state,
+        TurnInput(
+            session_id="session-llm-current-free-sleep-priority",
+            channel="grpc",
+            input_mode="message",
+            raw_input="23点睡",
+            language_preference="zh-CN",
+        ),
+    )
+
+    assert understood["content_units"] == [
+        {
+            "unit_id": "unit-1",
+            "unit_text": "23点睡",
+            "action_mode": "answer",
+            "candidate_question_ids": ["question-03"],
+            "winner_question_id": "question-03",
+            "needs_attribution": False,
+            "raw_extracted_value": {"bedtime": "23:00"},
+            "selected_options": ["B"],
+            "input_value": "",
+            "field_updates": {},
+            "missing_fields": [],
+        }
+    ]
+
+
 def test_content_understand_preserves_llm_question_02_wake_fragment_from_input_value_only(
     question_catalog: dict,
 ) -> None:

@@ -169,6 +169,7 @@ class ContentUnderstandNode:
         normalized = self._normalize_unit(content_unit, 1)
         normalized = self._prefer_regular_schedule_question(graph_state, normalized)
         normalized = self._ensure_regular_schedule_question(graph_state, normalized)
+        normalized = self._prefer_current_free_time_question(graph_state, normalized)
         normalized = self._resolve_single_choice_winner(graph_state, normalized)
         question_id = normalized.get("winner_question_id")
         if not question_id:
@@ -222,6 +223,75 @@ class ContentUnderstandNode:
             "field_updates": field_updates,
             "missing_fields": missing_fields,
         }
+
+    def _prefer_current_free_time_question(self, graph_state: dict, unit: dict) -> dict:
+        session_memory = graph_state["session_memory"]
+        target_question_id = self._time_question_priority_target(
+            session_memory,
+            str(unit.get("unit_text", "")),
+        )
+        if target_question_id not in {"question-03", "question-04"}:
+            return unit
+
+        current_question_id = str(session_memory.get("current_question_id") or "")
+        modify_target = str((session_memory.get("pending_modify_context") or {}).get("question_id") or "")
+        if target_question_id not in {current_question_id, modify_target}:
+            return unit
+
+        if str(unit.get("winner_question_id") or "") == target_question_id:
+            return unit
+
+        mapped = self._map_unit_to_target_question(
+            graph_state,
+            unit,
+            target_question_id,
+        )
+        if mapped is None or not mapped.get("selected_options"):
+            return unit
+
+        return {
+            **unit,
+            "action_mode": self._action_mode(session_memory, target_question_id),
+            "candidate_question_ids": [target_question_id],
+            "winner_question_id": target_question_id,
+            "needs_attribution": False,
+            "selected_options": list(mapped.get("selected_options", [])),
+            "input_value": str(mapped.get("input_value", "")),
+            "field_updates": dict(mapped.get("field_updates", {})),
+            "missing_fields": list(mapped.get("missing_fields", [])),
+        }
+
+    def _map_unit_to_target_question(
+        self,
+        graph_state: dict,
+        unit: dict,
+        question_id: str,
+    ) -> dict | None:
+        question = graph_state["question_catalog"]["question_index"].get(question_id)
+        if not question:
+            return None
+        mapped = map_content_answer(
+            question,
+            unit.get("raw_extracted_value", unit.get("unit_text", "")),
+            raw_text=unit.get("unit_text", ""),
+            allow_custom_empty_option_fallback=(
+                question_id == graph_state["session_memory"].get("current_question_id")
+            ),
+        )
+        if (
+            not mapped.get("selected_options")
+            and not mapped.get("field_updates")
+            and not mapped.get("missing_fields")
+            and self._is_single_choice_question(question)
+        ):
+            llm_mapped = self._try_llm_option_mapping(
+                graph_state,
+                question,
+                unit.get("unit_text", ""),
+            )
+            if llm_mapped is not None:
+                mapped = llm_mapped
+        return mapped
 
     def _apply_current_single_choice_custom_fallback(
         self,
@@ -1265,6 +1335,8 @@ class ContentUnderstandNode:
         if winner_question_id:
             question = graph_state["question_catalog"]["question_index"].get(winner_question_id)
             if self._is_single_choice_question(question):
+                if self._content_unit_has_answer_signal(unit):
+                    return unit
                 return {
                     **unit,
                     "needs_attribution": False,

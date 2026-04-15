@@ -1,12 +1,25 @@
 """Integration tests for the minimal runtime engine."""
 
+import json
+from pathlib import Path
+
 from somni_quiz_ai.grpc.generated import somni_quiz_pb2
 
 from somni_graph_quiz.adapters.grpc.mapper import map_questionnaire_to_catalog
+from somni_graph_quiz.adapters.streamlit.mapper import map_streamlit_questionnaire_to_catalog
 from somni_graph_quiz.contracts.graph_state import create_graph_state
 from somni_graph_quiz.contracts.turn_input import TurnInput
 from somni_graph_quiz.llm.client import FakeLLMProvider
 from somni_graph_quiz.runtime.engine import GraphRuntimeEngine
+
+
+def _business9_question_catalog() -> dict:
+    payload = json.loads(
+        (Path(__file__).resolve().parents[3] / "data" / "streamlit_dynamic_questionnaire.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    return map_streamlit_questionnaire_to_catalog(payload["questionnaire"])
 
 
 def test_engine_routes_non_content_turn_to_pullback_response(question_catalog: dict) -> None:
@@ -745,6 +758,60 @@ def test_engine_free_sleep_answer_moves_forward_without_reasking_regular_schedul
     assert result["pending_question"]["question_id"] == "question-04"
     assert "作息" not in result["assistant_message"]
     assert "wake" in result["assistant_message"].lower() or "起床" in result["assistant_message"]
+
+
+def test_engine_prefers_current_free_sleep_question_over_regular_partial_after_navigate_next() -> None:
+    graph_state = create_graph_state(
+        session_id="session-partial-then-next-free-sleep",
+        channel="grpc",
+        quiz_mode="dynamic",
+        question_catalog=_business9_question_catalog(),
+        language_preference="zh-CN",
+    )
+    engine = GraphRuntimeEngine()
+
+    answered_age = engine.run_turn(graph_state, TurnInput(
+        session_id="session-partial-then-next-free-sleep",
+        channel="grpc",
+        input_mode="message",
+        raw_input="我18岁",
+        language_preference="zh-CN",
+    ))
+    partial_schedule = engine.run_turn(answered_age["updated_graph_state"], TurnInput(
+        session_id="session-partial-then-next-free-sleep",
+        channel="grpc",
+        input_mode="message",
+        raw_input="11点起",
+        language_preference="zh-CN",
+    ))
+    navigated = engine.run_turn(partial_schedule["updated_graph_state"], TurnInput(
+        session_id="session-partial-then-next-free-sleep",
+        channel="grpc",
+        input_mode="message",
+        raw_input="下一题",
+        language_preference="zh-CN",
+    ))
+    result = engine.run_turn(navigated["updated_graph_state"], TurnInput(
+        session_id="session-partial-then-next-free-sleep",
+        channel="grpc",
+        input_mode="message",
+        raw_input="23点睡",
+        language_preference="zh-CN",
+    ))
+
+    answers = {item["question_id"]: item for item in result["answer_record"]["answers"]}
+    assert answers["question-03"]["selected_options"] == ["B"]
+    assert "question-02" not in answers
+    assert result["updated_graph_state"]["session_memory"]["pending_partial_answers"]["question-02"] == {
+        "question_id": "question-02",
+        "filled_fields": {"wake_time": "11:00"},
+        "missing_fields": ["bedtime"],
+        "source_question_state": "partial",
+    }
+    assert result["pending_question"]["question_id"] == "question-04"
+    assert "作息" not in result["assistant_message"]
+    assert "入睡时间" in result["assistant_message"]
+    assert "起床时间" in result["assistant_message"]
 
 
 def test_engine_undo_restores_previous_answer(question_catalog: dict) -> None:
