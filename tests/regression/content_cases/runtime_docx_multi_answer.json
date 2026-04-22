@@ -1,0 +1,21 @@
+{
+  "case_id": "runtime_docx_multi_answer",
+  "title": "Single utterance fills age and regular schedule",
+  "channel": "runtime",
+  "language": "zh-CN",
+  "quiz_mode": "dynamic",
+  "turns": [
+    {
+      "input_mode": "message",
+      "raw_input": "我22岁，每天11点睡觉，7点起床"
+    }
+  ],
+  "expected": {
+    "answered_question_ids": ["question-01", "question-02"],
+    "modified_question_ids": [],
+    "partial_question_ids": [],
+    "pending_question_id": "question-03",
+    "clarification_needed": false,
+    "skipped_question_ids": []
+  }
+}

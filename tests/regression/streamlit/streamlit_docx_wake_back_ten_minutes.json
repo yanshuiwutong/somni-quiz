@@ -1,0 +1,41 @@
+{
+  "case_id": "streamlit_docx_wake_back_ten_minutes",
+  "title": "Streamlit docx fallback maps wake-back 十来分钟 to question-08 option A",
+  "channel": "streamlit",
+  "language": "zh-CN",
+  "quiz_mode": "dynamic",
+  "initial_state": {
+    "current_question_id": "question-08",
+    "pending_question_ids": [
+      "question-08",
+      "question-09"
+    ],
+    "unanswered_question_ids": [
+      "question-08",
+      "question-09"
+    ]
+  },
+  "turns": [
+    {
+      "input_mode": "message",
+      "raw_input": "十来分钟"
+    }
+  ],
+  "expected": {
+    "answered_question_ids": [
+      "question-08"
+    ],
+    "modified_question_ids": [],
+    "partial_question_ids": [],
+    "pending_question_id": "question-09",
+    "clarification_needed": false,
+    "skipped_question_ids": [],
+    "expected_answer_record": {
+      "question-08": {
+        "selected_options": [
+          "A"
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "case_id": "streamlit_non_content_greeting_pullback",
+  "title": "Streamlit greeting stays non-content and does not get recorded",
+  "channel": "streamlit",
+  "language": "zh-CN",
+  "quiz_mode": "dynamic",
+  "turns": [
+    {
+      "input_mode": "message",
+      "raw_input": "你好"
+    }
+  ],
+  "expected": {
+    "answered_question_ids": [],
+    "modified_question_ids": [],
+    "partial_question_ids": [],
+    "pending_question_id": "question-01",
+    "clarification_needed": false,
+    "skipped_question_ids": [],
+    "expected_response_contains": ["你好", "您的年龄段"]
+  }
+}

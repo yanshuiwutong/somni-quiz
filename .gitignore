@@ -1,0 +1,16 @@
+.env
+.pytest_cache/
+.ruff_cache/
+.tmp/
+__pycache__/
+*.py[cod]
+*.pyc.*
+*.pyo
+*.pyd
+*.egg-info/
+%F%
+\!TMPPY!
+scripts/_ssh_auth_probe_tmp.py
+pytest-of-yww/
+server_backups/
+img_v3_02110_*.jpg

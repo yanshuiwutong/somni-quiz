@@ -1,0 +1,30 @@
+{
+  "case_id": "streamlit_docx_partial_followup",
+  "title": "Streamlit partial regular schedule follow-up completes question-02",
+  "channel": "streamlit",
+  "language": "zh-CN",
+  "quiz_mode": "dynamic",
+  "initial_state": {
+    "current_question_id": "question-02",
+    "pending_question_ids": ["question-02", "question-03", "question-04", "question-05", "question-06", "question-07", "question-08", "question-09"],
+    "unanswered_question_ids": ["question-02", "question-03", "question-04", "question-05", "question-06", "question-07", "question-08", "question-09"]
+  },
+  "turns": [
+    {
+      "input_mode": "message",
+      "raw_input": "11点睡"
+    },
+    {
+      "input_mode": "message",
+      "raw_input": "7点起"
+    }
+  ],
+  "expected": {
+    "answered_question_ids": ["question-02"],
+    "modified_question_ids": [],
+    "partial_question_ids": [],
+    "pending_question_id": "question-03",
+    "clarification_needed": false,
+    "skipped_question_ids": []
+  }
+}

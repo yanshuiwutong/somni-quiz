@@ -1,0 +1,124 @@
+syntax = "proto3";
+
+package somni.quiz.v1;
+
+import "google/protobuf/struct.proto";
+
+message BusinessOption {
+  string option_id = 1;
+  string option_text = 2;
+  optional double score = 3;
+  int32 sort_order = 4;
+  bool is_input_enabled = 5;
+  string label_value = 6;
+}
+
+message BusinessQuestion {
+  string question_id = 1;
+  string title = 2;
+  string input_type = 3;
+  repeated string tags = 4;
+  repeated BusinessOption options = 5;
+  string description = 6;
+  string scoring_type = 7;
+  string dimension = 8;
+  string business_type = 9;
+  string language = 10;
+  int32 status = 11;
+  bool is_extra_input = 12;
+  PendingQuestionConfig config = 13;
+}
+
+message PendingOption {
+  string option_id = 1;
+  string option_text = 2;
+}
+
+message PendingQuestionConfigItem {
+  int32 index = 1;
+  string label = 2;
+  string format = 3;
+}
+
+message PendingQuestionConfig {
+  repeated PendingQuestionConfigItem items = 1;
+}
+
+message PendingQuestion {
+  string question_id = 1;
+  string qid = 2;
+  string title = 3;
+  string input_type = 4;
+  repeated string tags = 5;
+  repeated PendingOption options = 6;
+  PendingQuestionConfig config = 7;
+}
+
+message AnswerValue {
+  repeated string option_codes = 1;
+  optional string bedtime = 2;
+  optional string wake_time = 3;
+  optional double score = 4;
+}
+
+message AnswerItem {
+  string question_id = 1;
+  AnswerValue value = 2;
+  DirectAnswer direct_answer = 3;
+}
+
+message AnswerRecord {
+  string answer_id = 1;
+  repeated AnswerItem answers = 2;
+}
+
+message DirectAnswer {
+  string question_id = 1;
+  repeated string selected_options = 2;
+  string input_value = 3;
+}
+
+message InitQuizRequest {
+  string session_id = 1;
+  string language = 2;
+  repeated BusinessQuestion questionnaire = 3;
+  AnswerRecord answer_record = 4;
+  string quiz_mode = 5;
+  string default_city = 6;
+}
+
+message InitQuizResponse {
+  bool success = 1;
+  string session_id = 2;
+  bool initialized = 3;
+  string assistant_message = 4;
+  PendingQuestion pending_question = 5;
+  AnswerRecord answer_record = 6;
+  string quiz_mode = 7;
+  double progress_percent = 8;
+}
+
+message ChatQuizRequest {
+  string session_id = 1;
+  string message = 2;
+  DirectAnswer direct_answer = 3;
+}
+
+message ChatQuizResponse {
+  bool success = 1;
+  string session_id = 2;
+  string assistant_message = 3;
+  PendingQuestion pending_question = 4;
+  bool finalized = 5;
+  AnswerRecord answer_record = 6;
+  google.protobuf.Struct final_result = 7;
+  string quiz_mode = 8;
+  string answer_status_code = 9;
+  double progress_percent = 10;
+}
+
+service QuizService {
+  rpc InitQuiz(InitQuizRequest) returns (InitQuizResponse);
+  rpc ChatQuiz(ChatQuizRequest) returns (ChatQuizResponse);
+}
+

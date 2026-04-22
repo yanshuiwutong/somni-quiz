@@ -1,0 +1,43 @@
+{
+  "case_id": "streamlit_skip_partial",
+  "title": "Streamlit skip keeps partial schedule state",
+  "channel": "streamlit",
+  "language": "zh-CN",
+  "quiz_mode": "dynamic",
+  "initial_state": {
+    "current_question_id": "question-02",
+    "pending_question_ids": ["question-02", "question-03", "question-04"],
+    "pending_partial_answers": {
+      "question-02": {
+        "question_id": "question-02",
+        "filled_fields": {
+          "bedtime": "23:00"
+        },
+        "missing_fields": ["wake_time"],
+        "source_question_state": "partial"
+      }
+    },
+    "partial_question_ids": ["question-02"],
+    "question_states": {
+      "question-02": {
+        "status": "partial",
+        "attempt_count": 1,
+        "last_action_mode": "answer"
+      }
+    }
+  },
+  "turns": [
+    {
+      "input_mode": "message",
+      "raw_input": "跳过"
+    }
+  ],
+  "expected": {
+    "answered_question_ids": [],
+    "modified_question_ids": [],
+    "partial_question_ids": ["question-02"],
+    "pending_question_id": "question-03",
+    "clarification_needed": false,
+    "skipped_question_ids": ["question-02"]
+  }
+}

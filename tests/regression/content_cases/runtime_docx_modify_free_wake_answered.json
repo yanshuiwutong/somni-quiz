@@ -1,0 +1,66 @@
+{
+  "case_id": "runtime_docx_modify_free_wake_answered",
+  "title": "Modify answered free-wake question from contextual sentence",
+  "channel": "runtime",
+  "language": "zh-CN",
+  "quiz_mode": "dynamic",
+  "initial_state": {
+    "answered_records": {
+      "question-04": {
+        "question_id": "question-04",
+        "selected_options": ["C"],
+        "input_value": "",
+        "field_updates": {}
+      }
+    },
+    "answered_question_ids": ["question-04"],
+    "unanswered_question_ids": ["question-01", "question-02", "question-03", "question-05", "question-06", "question-07", "question-08", "question-09"],
+    "current_question_id": "question-05",
+    "pending_question_ids": ["question-05", "question-06", "question-07", "question-08", "question-09"],
+    "recent_turns": [
+      {
+        "turn_index": 1,
+        "raw_input": "8点半",
+        "main_branch": "content",
+        "turn_outcome": "answered",
+        "recorded_question_ids": ["question-04"],
+        "modified_question_ids": [],
+        "partial_question_ids": [],
+        "skipped_question_ids": []
+      }
+    ],
+    "question_states": {
+      "question-04": {
+        "status": "answered",
+        "attempt_count": 0,
+        "last_action_mode": "answer"
+      }
+    }
+  },
+  "turns": [
+    {
+      "input_mode": "message",
+      "raw_input": "自由安排的话，我会七点起床"
+    }
+  ],
+  "expected": {
+    "answered_question_ids": ["question-04"],
+    "modified_question_ids": ["question-04"],
+    "partial_question_ids": [],
+    "pending_question_id": "question-05",
+    "clarification_needed": false,
+    "skipped_question_ids": [],
+    "expected_answer_record": {
+      "question-04": {
+        "selected_options": ["B"],
+        "input_value": ""
+      }
+    },
+    "expected_previous_answer_record": {
+      "question-04": {
+        "selected_options": ["C"],
+        "input_value": ""
+      }
+    }
+  }
+}

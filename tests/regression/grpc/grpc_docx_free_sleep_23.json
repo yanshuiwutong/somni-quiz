@@ -1,0 +1,51 @@
+{
+  "case_id": "grpc_docx_free_sleep_23",
+  "title": "gRPC docx fallback maps free sleep 23点 to question-03 option B",
+  "channel": "grpc",
+  "language": "zh-CN",
+  "quiz_mode": "dynamic",
+  "turns": [
+    {
+      "input_mode": "direct_answer",
+      "raw_input": "25-34 岁",
+      "direct_answer_payload": {
+        "question_id": "question-01",
+        "selected_options": [],
+        "input_value": "25-34 岁"
+      }
+    },
+    {
+      "input_mode": "direct_answer",
+      "raw_input": "11点睡 7点起",
+      "direct_answer_payload": {
+        "question_id": "question-02",
+        "selected_options": [],
+        "input_value": "11点睡 7点起"
+      }
+    },
+    {
+      "input_mode": "message",
+      "raw_input": "23点"
+    }
+  ],
+  "expected": {
+    "answered_question_ids": [
+      "question-01",
+      "question-02",
+      "question-03"
+    ],
+    "modified_question_ids": [],
+    "partial_question_ids": [],
+    "pending_question_id": "question-04",
+    "clarification_needed": false,
+    "skipped_question_ids": [],
+    "expected_answer_record": {
+      "question-03": {
+        "selected_options": [
+          "B"
+        ],
+        "input_value": ""
+      }
+    }
+  }
+}

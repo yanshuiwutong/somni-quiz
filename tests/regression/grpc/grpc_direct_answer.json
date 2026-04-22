@@ -1,0 +1,26 @@
+{
+  "case_id": "grpc_direct_answer",
+  "title": "gRPC direct_answer records current question",
+  "channel": "grpc",
+  "language": "zh-CN",
+  "quiz_mode": "dynamic",
+  "turns": [
+    {
+      "input_mode": "direct_answer",
+      "raw_input": "29",
+      "direct_answer_payload": {
+        "question_id": "question-01",
+        "selected_options": [],
+        "input_value": "29"
+      }
+    }
+  ],
+  "expected": {
+    "answered_question_ids": ["question-01"],
+    "modified_question_ids": [],
+    "partial_question_ids": [],
+    "pending_question_id": "question-02",
+    "clarification_needed": false,
+    "skipped_question_ids": []
+  }
+}

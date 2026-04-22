@@ -1,0 +1,46 @@
+{
+  "case_id": "runtime_docx_modify_answered",
+  "title": "Modify already answered age question using natural language",
+  "channel": "runtime",
+  "language": "zh-CN",
+  "quiz_mode": "dynamic",
+  "initial_state": {
+    "answered_records": {
+      "question-01": {
+        "question_id": "question-01",
+        "selected_options": ["A"],
+        "input_value": "18-24 岁",
+        "field_updates": {}
+      }
+    },
+    "answered_question_ids": ["question-01"],
+    "unanswered_question_ids": ["question-02", "question-03", "question-04", "question-05", "question-06", "question-07", "question-08", "question-09"],
+    "current_question_id": "question-01",
+    "question_states": {
+      "question-01": {
+        "status": "answered",
+        "attempt_count": 0,
+        "last_action_mode": "answer"
+      }
+    }
+  },
+  "turns": [
+    {
+      "input_mode": "message",
+      "raw_input": "我改成25-34岁"
+    }
+  ],
+  "expected": {
+    "answered_question_ids": ["question-01"],
+    "modified_question_ids": ["question-01"],
+    "partial_question_ids": [],
+    "pending_question_id": "question-02",
+    "clarification_needed": false,
+    "skipped_question_ids": [],
+    "expected_answer_record": {
+      "question-01": {
+        "selected_options": ["B"]
+      }
+    }
+  }
+}

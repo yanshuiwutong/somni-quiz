@@ -1,0 +1,30 @@
+{
+  "case_id": "grpc_docx_view_all",
+  "title": "gRPC view-all request returns current records without dropping answers",
+  "channel": "grpc",
+  "language": "zh-CN",
+  "quiz_mode": "dynamic",
+  "turns": [
+    {
+      "input_mode": "direct_answer",
+      "raw_input": "25-34 岁",
+      "direct_answer_payload": {
+        "question_id": "question-01",
+        "selected_options": ["B"],
+        "input_value": "25-34 岁"
+      }
+    },
+    {
+      "input_mode": "message",
+      "raw_input": "查看记录"
+    }
+  ],
+  "expected": {
+    "answered_question_ids": ["question-01"],
+    "modified_question_ids": [],
+    "partial_question_ids": [],
+    "pending_question_id": "question-02",
+    "clarification_needed": false,
+    "skipped_question_ids": []
+  }
+}

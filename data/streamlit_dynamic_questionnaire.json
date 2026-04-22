@@ -1,0 +1,293 @@
+{
+  "answer_record": {
+    "answer_id": "answer-1",
+    "answers": []
+  },
+  "language": "zh",
+  "questionnaire": [
+    {
+      "input_type": "radio",
+      "options": [
+        {
+          "option_id": "A",
+          "option_text": "18-24 岁"
+        },
+        {
+          "option_id": "B",
+          "option_text": "25-34 岁"
+        },
+        {
+          "option_id": "C",
+          "option_text": "35-44 岁"
+        },
+        {
+          "option_id": "D",
+          "option_text": "45-54 岁"
+        },
+        {
+          "option_id": "E",
+          "option_text": "55 岁以上"
+        },
+        {
+          "option_id": "F",
+          "option_text": "不愿透露"
+        }
+      ],
+      "question_id": "question-01",
+      "tags": [
+        "基础信息"
+      ],
+      "title": "您的年龄段？"
+    },
+    {
+      "config": {
+        "items": [
+          {
+            "format": "HH:mm",
+            "index": 0,
+            "label": "上床时间："
+          },
+          {
+            "format": "HH:mm",
+            "index": 1,
+            "label": "起床时间："
+          }
+        ]
+      },
+      "input_type": "time_range",
+      "options": [],
+      "question_id": "question-02",
+      "tags": [
+        "基础信息"
+      ],
+      "title": "您平时通常的作息？"
+    },
+    {
+      "input_type": "radio",
+      "options": [
+        {
+          "option_id": "A",
+          "option_text": "22:00 前",
+          "score": 1
+        },
+        {
+          "option_id": "B",
+          "option_text": "22:00-23:15",
+          "score": 2
+        },
+        {
+          "option_id": "C",
+          "option_text": "23:15-00:30",
+          "score": 3
+        },
+        {
+          "option_id": "D",
+          "option_text": "00:30 后",
+          "score": 4
+        }
+      ],
+      "question_id": "question-03",
+      "tags": [
+        "人格判定"
+      ],
+      "title": "完全自由安排时，您最自然的入睡时间是？"
+    },
+    {
+      "input_type": "radio",
+      "options": [
+        {
+          "option_id": "A",
+          "option_text": "06:00 前",
+          "score": 1
+        },
+        {
+          "option_id": "B",
+          "option_text": "06:00-07:45",
+          "score": 2
+        },
+        {
+          "option_id": "C",
+          "option_text": "07:45-09:45",
+          "score": 3
+        },
+        {
+          "option_id": "D",
+          "option_text": "09:45 后",
+          "score": 4
+        }
+      ],
+      "question_id": "question-04",
+      "tags": [
+        "人格判定"
+      ],
+      "title": "完全自由安排时，您最自然的起床时间是？"
+    },
+    {
+      "input_type": "radio",
+      "options": [
+        {
+          "option_id": "A",
+          "option_text": "毫无影响，倒头就睡",
+          "score": 0
+        },
+        {
+          "option_id": "B",
+          "option_text": "略有波动，但入睡时间不会变太长",
+          "score": 0
+        },
+        {
+          "option_id": "C",
+          "option_text": "会翻来覆去一阵子才能睡着",
+          "score": 0
+        },
+        {
+          "option_id": "D",
+          "option_text": "显著紧张，伴有心跳快或身体紧绷",
+          "score": 1
+        },
+        {
+          "option_id": "E",
+          "option_text": "大脑停不下来，几乎睡不着",
+          "score": 1
+        }
+      ],
+      "question_id": "question-05",
+      "tags": [
+        "人格判定"
+      ],
+      "title": "遇到压力或重要事情，您的睡眠会受影响吗？"
+    },
+    {
+      "input_type": "radio",
+      "options": [
+        {
+          "option_id": "A",
+          "option_text": "完全不敏感，在哪都能睡",
+          "score": 0
+        },
+        {
+          "option_id": "B",
+          "option_text": "轻微敏感，但影响不大",
+          "score": 0
+        },
+        {
+          "option_id": "C",
+          "option_text": "需要相对安静和避光的环境",
+          "score": 0
+        },
+        {
+          "option_id": "D",
+          "option_text": "一点微光或细小声音就会惊醒",
+          "score": 1
+        },
+        {
+          "option_id": "E",
+          "option_text": "必须绝对黑暗安静",
+          "score": 1
+        }
+      ],
+      "question_id": "question-06",
+      "tags": [
+        "人格判定"
+      ],
+      "title": "您对卧室里的光线、声音敏感度如何？"
+    },
+    {
+      "input_type": "radio",
+      "options": [
+        {
+          "option_id": "A",
+          "option_text": "睡前总想事或刷手机，静不下来",
+          "score": 0
+        },
+        {
+          "option_id": "B",
+          "option_text": "躺下很久才能睡着",
+          "score": 1
+        },
+        {
+          "option_id": "C",
+          "option_text": "半夜容易醒，醒了难再睡",
+          "score": 2
+        },
+        {
+          "option_id": "D",
+          "option_text": "早上起不来，醒后很昏沉",
+          "score": 3
+        },
+        {
+          "option_id": "E",
+          "option_text": "我睡得挺好，没什么困扰",
+          "score": 4
+        }
+      ],
+      "question_id": "question-07",
+      "tags": [
+        "核心锚点"
+      ],
+      "title": "最影响你睡好的问题是哪一个？"
+    },
+    {
+      "input_type": "radio",
+      "options": [
+        {
+          "option_id": "A",
+          "option_text": "毫无困难，倒头无缝衔接",
+          "score": 0
+        },
+        {
+          "option_id": "B",
+          "option_text": "需要翻来覆去 15-30 分钟",
+          "score": 1
+        },
+        {
+          "option_id": "C",
+          "option_text": "比较困难，需要 30 分钟以上",
+          "score": 2
+        },
+        {
+          "option_id": "D",
+          "option_text": "非常大，感官像雷达一样全开",
+          "score": 3
+        }
+      ],
+      "question_id": "question-08",
+      "tags": [
+        "核心锚点"
+      ],
+      "title": "半夜醒来后，再次入睡困难吗？"
+    },
+    {
+      "input_type": "radio",
+      "options": [
+        {
+          "option_id": "A",
+          "option_text": "几乎立刻清醒，满血复活",
+          "score": 0
+        },
+        {
+          "option_id": "B",
+          "option_text": "需要洗漱或咖啡缓冲",
+          "score": 1
+        },
+        {
+          "option_id": "C",
+          "option_text": "1-2 小时都不太清醒，身体沉重",
+          "score": 2
+        },
+        {
+          "option_id": "D",
+          "option_text": "",
+          "score": 3
+        }
+      ],
+      "question_id": "question-09",
+      "tags": [
+        "核心锚点"
+      ],
+      "title": "早上醒来后，多久能彻底清醒？"
+    }
+  ],
+  "quiz_mode": "dynamic",
+  "session_id": "sess-init-full-001"
+}

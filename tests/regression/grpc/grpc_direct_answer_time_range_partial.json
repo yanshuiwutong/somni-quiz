@@ -1,0 +1,27 @@
+{
+  "case_id": "grpc_direct_answer_time_range_partial",
+  "title": "gRPC direct_answer keeps partial time_range in runtime state and asks followup",
+  "channel": "grpc",
+  "language": "zh-CN",
+  "quiz_mode": "dynamic",
+  "turns": [
+    {
+      "input_mode": "direct_answer",
+      "raw_input": "11点睡",
+      "direct_answer_payload": {
+        "question_id": "question-02",
+        "selected_options": [],
+        "input_value": "11点睡"
+      }
+    }
+  ],
+  "expected": {
+    "answered_question_ids": [],
+    "modified_question_ids": [],
+    "partial_question_ids": [],
+    "pending_question_id": "question-02",
+    "clarification_needed": false,
+    "skipped_question_ids": [],
+    "expected_response_contains": ["起床"]
+  }
+}
